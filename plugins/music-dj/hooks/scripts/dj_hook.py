@@ -42,13 +42,31 @@ def emit_context(event, mood):
 
 
 def handle_mood(event, mood, force=False):
+    """Switch natively when we can, otherwise tell Claude to do it.
+
+    decide_switch() is called exactly once: it owns the debounce and writes
+    the new mood into state, so calling it twice would consume the switch and
+    then report "already in mood X" on the second pass.
+    """
     import musicdj
-    if musicdj.is_macos():
-        musicdj.maybe_switch(mood, force=force)
-        return
     should, _msg = musicdj.decide_switch(mood, force=force)
-    if should:
-        emit_context(event, mood)
+    if not should:
+        return
+
+    cfg = musicdj.load_config()
+    # Native AppleScript only drives the Music app, so it only applies on
+    # macOS *and* when Apple Music is the chosen service. A Mac user on
+    # Spotify or YouTube Music is running the browser DJ like everyone else.
+    if (musicdj.is_macos()
+            and cfg.get("service", "apple-music") == "apple-music"):
+        playlist = cfg.get("playlists", {}).get(mood)
+        if playlist and musicdj.play_playlist(playlist, cfg)[0]:
+            return
+        # Native control was unavailable (Music app closed, or no playlist
+        # mapped for this mood). Fall through rather than swallowing the
+        # mood, so the browser DJ still gets told.
+
+    emit_context(event, mood)
 
 
 def main():
