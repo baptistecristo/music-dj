@@ -44,6 +44,7 @@ class DJ:
         self.current = None
         self.notice = None
         self.previews_only = False
+        self.autoplay_blocked = False
         self.listeners = []          # UI push callbacks
         self._refill_lock = asyncio.Lock()
 
@@ -171,11 +172,18 @@ class DJ:
                                            timeout=SEARCH_TIMEOUT)
             if not reply or reply.get("error"):
                 return None
+            # A lane with fewer artists than the batch size gets cycled, so the
+            # same artist is searched more than once. Excluding what this batch
+            # already took makes the repeat yield their second song instead of
+            # the same one over and over.
             song = picker.choose_resolution(reply.get("songs"),
                                             exclude_ids=exclude,
                                             preferred_artist=pick.get("artist"))
             if not song:
                 return None
+            # No await between choosing and claiming, so concurrent resolves
+            # cannot land on the same track.
+            exclude.add(str(song["catalogId"]))
             return {
                 "catalogId": str(song["catalogId"]),
                 "title": song.get("title") or pick.get("title"),
@@ -280,6 +288,12 @@ class DJ:
             await self.play_next()
 
         elif kind == "playback":
+            # State 2 is "playing", so audio is coming out and whatever the
+            # browser was blocking, it isn't blocking any more.
+            if evt.get("state") == 2 and self.autoplay_blocked:
+                log.info("audio is flowing again; autoplay unblocked")
+                self.autoplay_blocked = False
+                self.notice = None
             if self.current and evt.get("catalogId") == self.current.get("catalogId"):
                 self.current["position"] = evt.get("position", 0)
                 self.current["duration"] = evt.get("duration") or self.current.get("duration")
@@ -295,6 +309,13 @@ class DJ:
             self.push()
 
         elif kind == "autoplayBlocked":
+            # Loud on purpose. With no overlay running this log line is the
+            # only way to find out why the music went quiet, and the fix is a
+            # single click that nobody would guess at.
+            if not self.autoplay_blocked:
+                log.warning("autoplay blocked by the browser — click play once "
+                            "in the DJ tab and it will pick up from there")
+            self.autoplay_blocked = True
             self.notice = "click play in the DJ tab once"
             self.push()
 
@@ -316,6 +337,10 @@ class DJ:
 
         elif kind in ("injected", "tabReady"):
             # The page is back but not necessarily usable yet; wait for ready.
+            # Anything in flight died with the old document, so stop waiting on
+            # replies that will never arrive.
+            if hasattr(self.tx, "fail_pending"):
+                self.tx.fail_pending("the tab reloaded mid-command")
             self.notice = None
             self.push()
 

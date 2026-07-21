@@ -66,6 +66,18 @@ class BridgeTransport:
     def attach(self, ws):
         self.ws = ws
 
+    def fail_pending(self, reason):
+        """Give up on replies that are never coming.
+
+        A tab reload destroys the page mid-command while the worker's socket
+        stays open, so nothing else would notice and the caller would sit out
+        its full timeout.
+        """
+        for mid, fut in list(self.pending.items()):
+            if not fut.done():
+                fut.set_result({"error": reason})
+            self.pending.pop(mid, None)
+
     def detach(self, ws):
         if self.ws is ws:
             self.ws = None

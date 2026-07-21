@@ -342,6 +342,66 @@ async def test_autoplay_blocked_is_explained_not_swallowed():
 
 
 @pytest.mark.asyncio
+async def test_autoplay_block_clears_once_audio_actually_flows():
+    dj = make_dj()
+    await dj.on_event({"evt": "autoplayBlocked"})
+    assert dj.autoplay_blocked is True
+    # State 2 is "playing": the click happened, the block is gone.
+    await dj.on_event({"evt": "playback", "state": 2, "catalogId": "x",
+                       "title": "T", "artist": "A"})
+    assert dj.autoplay_blocked is False
+    assert dj.ui_state()["notice"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_still_blocked_state_does_not_clear_the_warning():
+    dj = make_dj()
+    await dj.on_event({"evt": "autoplayBlocked"})
+    # State 1 is "loading" -- stuck there is what being blocked looks like.
+    await dj.on_event({"evt": "playback", "state": 1, "catalogId": "x"})
+    assert dj.autoplay_blocked is True
+    assert "click play" in dj.ui_state()["notice"]
+
+
+@pytest.mark.asyncio
+async def test_a_reload_abandons_commands_the_old_page_will_never_answer():
+    calls = []
+
+    class Tracking(FakeTransport):
+        def fail_pending(self, reason):
+            calls.append(reason)
+
+    dj = make_dj(Tracking())
+    await dj.on_event({"evt": "injected"})
+    assert calls, "in-flight commands were left to time out"
+
+
+@pytest.mark.asyncio
+async def test_repeating_an_artist_yields_a_different_song():
+    # Real search returns the same ranked list every time, so cycling a short
+    # lane used to resolve the same track repeatedly and dedupe down to one.
+    class StableSearch(FakeTransport):
+        async def call(self, cmd, timeout=None):
+            self.calls.append(cmd)
+            if cmd.get("cmd") == "search":
+                artist = cmd["term"]
+                return {"songs": [
+                    {"catalogId": artist + "-1", "title": "First",
+                     "artist": artist, "artworkUrl": None, "durationMs": 1000},
+                    {"catalogId": artist + "-2", "title": "Second",
+                     "artist": artist, "artworkUrl": None, "durationMs": 1000},
+                ]}
+            return {"ok": True}
+
+    dj = make_dj(StableSearch())
+    picks = [{"title": None, "artist": "Al Green", "why": "w"},
+             {"title": None, "artist": "Al Green", "why": "w"}]
+    resolved = await dj.resolve(picks)
+    ids = [t["catalogId"] for t in resolved]
+    assert len(set(ids)) == 2, "the repeat resolved to the same track"
+
+
+@pytest.mark.asyncio
 async def test_preview_only_points_at_the_apple_id():
     dj = make_dj()
     await dj.on_event({"evt": "ready", "storefront": "fr", "previewOnly": True})
