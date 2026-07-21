@@ -47,6 +47,10 @@ class DJ:
         self.autoplay_blocked = False
         self.listeners = []          # UI push callbacks
         self._refill_lock = asyncio.Lock()
+        # Confirming a play takes several seconds. Without this, a mood change
+        # arriving next to a trackEnded runs two of them at once and the queue
+        # advances twice -- you hear one track while the log names another.
+        self._play_lock = asyncio.Lock()
 
     # ------------------------------------------------------------- plumbing
 
@@ -223,6 +227,10 @@ class DJ:
     # ------------------------------------------------------------- playback
 
     async def play_next(self):
+        async with self._play_lock:
+            return await self._play_next()
+
+    async def _play_next(self):
         if not self.tx.connected:
             self.notice = "no player"
             self.push()
@@ -309,6 +317,15 @@ class DJ:
         kind = evt.get("evt")
 
         if kind == "trackEnded":
+            # Cutting in mid-song makes the player report the interrupted track
+            # as ended, and treating that as "finished, move on" skips a track
+            # you never heard. Only the track we believe is playing can end.
+            ended = evt.get("catalogId")
+            playing = (self.current or {}).get("catalogId")
+            if ended and playing and str(ended) != str(playing):
+                log.debug("ignoring trackEnded for %s; we are on %s",
+                          ended, playing)
+                return
             # Apple's own autoplay would pick the next track for us; we skip
             # deliberately, because curating is the entire point.
             await self.play_next()

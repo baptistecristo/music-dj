@@ -15,7 +15,9 @@ import webview
 
 from daemon import store
 
-COLLAPSED = (260, 40)
+# Collapsed is just the album art, so the window is a tile rather than a strip.
+# It opens to full width on hover, where the title and controls live.
+COLLAPSED = (48, 48)
 EXPANDED = (260, 130)
 
 HERE = os.path.dirname(os.path.abspath(__file__))

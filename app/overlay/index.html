@@ -23,9 +23,10 @@
     cursor: default;
   }
 
-  /* The whole strip drags the window (pywebview easy_drag), so anything
-     clickable has to opt out with .no-drag or the click becomes a drag. */
-  .no-drag { -webkit-app-region: no-drag; }
+  /* Dragging is opt-in: pywebview moves the window only when a click lands
+     directly on .pywebview-drag-region. Controls simply are not tagged, so
+     they stay clickable. (-webkit-app-region is an Electron thing and does
+     nothing here; .no-drag is kept only as a readable marker.) */
 
   #strip {
     height: 100%;
@@ -45,12 +46,24 @@
   }
 
   #art {
-    width: 20px; height: 20px;
-    border-radius: 3px;
+    width: 28px; height: 28px;
+    border-radius: 4px;
     background: var(--chip);
-    flex: 0 0 20px;
+    flex: 0 0 28px;
     object-fit: cover;
   }
+
+  /* Collapsed, the artwork is the whole strip: a cover is recognisable at a
+     glance in a way a truncated title never is. The name lives in the panel. */
+  body:not(.open) #track,
+  body:not(.open) #chip { display: none; }
+
+  body:not(.open) #row { justify-content: center; }
+
+  /* Fill the tile when collapsed: at 48px there is no room for chrome. */
+  body:not(.open) #strip { padding: 0; }
+  body:not(.open) #row { height: 48px; }
+  body:not(.open) #art { width: 40px; height: 40px; flex-basis: 40px; }
 
   #track {
     flex: 1 1 auto;
@@ -59,6 +72,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* The mood dot stays visible while collapsed, tucked onto the artwork, so
+     you can still tell a pinned mood from an inferred one at a glance. */
+  #minidot {
+    position: absolute;
+    top: 6px; right: 6px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #57c77f;
+    box-shadow: 0 0 0 2px var(--bg);
+  }
+
+  #minidot.pinned { background: #e0a33e; }
+
+  body.open #minidot { display: none; }
 
   #track .artist { color: var(--muted); }
 
@@ -167,16 +195,17 @@
 </head>
 <body>
 
-<div id="strip">
-  <div id="row">
-    <img id="art" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
-    <div id="track"><span class="title">—</span></div>
+<div id="strip" class="pywebview-drag-region">
+  <div id="row" class="pywebview-drag-region">
+    <img id="art" class="pywebview-drag-region" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+    <div id="track" class="pywebview-drag-region"><span class="title">—</span></div>
     <div id="chip" class="no-drag"><span id="dot"></span><span id="moodname">…</span></div>
   </div>
+  <div id="minidot"></div>
 
-  <div id="panel">
-    <div id="why"></div>
-    <div id="controls">
+  <div id="panel" class="pywebview-drag-region">
+    <div id="why" class="pywebview-drag-region"></div>
+    <div id="controls" class="pywebview-drag-region">
       <div id="transport" class="no-drag">
         <button data-act="previous" title="previous">⏮</button>
         <button data-act="playpause" id="playpause" title="play / pause">⏯</button>
@@ -184,7 +213,7 @@
       </div>
       <div id="stars" class="no-drag"></div>
     </div>
-    <div id="notice"></div>
+    <div id="notice" class="pywebview-drag-region"></div>
   </div>
 </div>
 
@@ -227,7 +256,9 @@ function render() {
 
   const mood = (state && state.mood) || {};
   el("moodname").textContent = mood.name || "—";
-  el("chip").classList.toggle("pinned", mood.source === "pinned");
+  const pinned = mood.source === "pinned";
+  el("chip").classList.toggle("pinned", pinned);
+  el("minidot").classList.toggle("pinned", pinned);
 
   el("why").textContent = (state && state.why) || "";
   el("notice").textContent = (state && state.notice) || "";
