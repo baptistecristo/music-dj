@@ -230,6 +230,52 @@ async def test_changing_mood_rebuilds_the_queue_for_the_new_lane():
 
 
 @pytest.mark.asyncio
+async def test_a_mood_drift_lets_the_current_song_finish():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.set_mood("writing")          # not urgent
+    assert dj.tx.sent("play") == [], "cut a song off mid-play"
+    assert dj.lane == "mellow"             # but the new lane is queued up
+
+
+@pytest.mark.asyncio
+async def test_the_next_track_comes_from_the_new_lane():
+    dj = make_dj()
+    await dj.play_next()
+    await dj.set_mood("writing")
+    dj.tx.calls.clear()
+    await dj.on_event({"evt": "trackEnded", "catalogId": dj.current["catalogId"]})
+    assert dj.tx.sent("play"), "the music stopped at the track boundary"
+    assert dj.queue["lane"] == "mellow"
+
+
+@pytest.mark.asyncio
+async def test_something_breaking_switches_the_music_immediately():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.set_mood("debugging")        # urgent: calm music should land now
+    assert dj.tx.sent("play"), "waited for the track to end"
+
+
+@pytest.mark.asyncio
+async def test_pinning_a_mood_by_hand_switches_immediately():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.set_mood("loose", pinned=True, force=True)
+    assert dj.tx.sent("play"), "an explicit request should not wait"
+
+
+@pytest.mark.asyncio
+async def test_a_mood_change_with_nothing_playing_starts_the_music():
+    dj = make_dj()
+    await dj.set_mood("writing")
+    assert dj.tx.sent("play"), "silence should not wait for a track boundary"
+
+
+@pytest.mark.asyncio
 async def test_setting_the_same_mood_again_does_not_rebuild():
     dj = make_dj()
     await dj.set_mood("coding")

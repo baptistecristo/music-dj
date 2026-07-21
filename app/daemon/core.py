@@ -104,7 +104,22 @@ class DJ:
         self.mood = mood
         self.queue = library.make_queue([], mood, self.lane, "profile", self.now())
         await self.refill()
+
+        # Cutting a song off partway is jarring, and moods drift while you work.
+        # So the new lane starts at the next track boundary -- except for the
+        # moods that mean something just broke, where the whole point is that
+        # calmer music arrives while it still matters. Pinning a mood by hand
+        # is an explicit request, so that switches now too.
+        if self.current and not (self.is_urgent(mood) or self.pinned):
+            log.info("queued %s for the next track; letting this one finish",
+                     self.lane)
+            self.push()
+            return
         await self.play_next()
+
+    def is_urgent(self, mood):
+        urgent = self.config.get("urgent_moods") or ["debugging"]
+        return mood in urgent
 
     async def watch_state(self, interval=2.0):
         """Poll state.json's mtime. Simpler and more reliable on Windows than
