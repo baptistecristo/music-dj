@@ -145,20 +145,31 @@ r = subprocess.run(
                                 ensure_ascii=False),
     capture_output=True, text=True, encoding="utf-8", timeout=15,
     env=dict(os.environ))
-if sys.platform == "darwin":
-    # handle_mood() takes the native AppleScript branch on macOS and returns
-    # before emit_context(), so no marker is printed. The BOM/accent parsing
-    # is still exercised: a decode failure would raise before that branch.
-    # NOTE: this also means the *browser* DJ gets no mood markers on macOS.
-    # Tracked separately; asserting it here documents current behaviour, it
-    # does not endorse it.
-    check("hook survives BOM + accents (native path, no marker)",
-          r.returncode == 0 and r.stdout == "", (r.stdout + r.stderr)[:200])
-else:
-    check("hook survives BOM + accents, emits marker",
-          r.returncode == 0 and "debugging" in r.stdout
-          and "additionalContext" in r.stdout,
-          (r.stdout + r.stderr)[:200])
+# Consistent on every platform: on macOS the native branch is tried first,
+# but Music.app is not running under CI, so handle_mood() falls through and
+# still emits the marker rather than swallowing the mood.
+check("hook survives BOM + accents, emits marker",
+      r.returncode == 0 and "debugging" in r.stdout
+      and "additionalContext" in r.stdout,
+      (r.stdout + r.stderr)[:200])
+
+# Regression: a Mac user on a web-player service must still get mood markers.
+# handle_mood() used to take the native AppleScript branch for every macOS
+# run and return before emit_context(), so the browser DJ heard nothing.
+cfg = musicdj.load_config()
+cfg["service"] = "spotify"
+musicdj.save_config(cfg)
+musicdj.save_state({"last_switch": 0})
+r = subprocess.run(
+    [sys.executable, os.path.join(ROOT, "hooks", "scripts", "dj_hook.py"), "prompt"],
+    input=json.dumps({"prompt": "corrige le bug"}),
+    capture_output=True, text=True, encoding="utf-8", timeout=15,
+    env=dict(os.environ))
+check("browser-mode service gets a marker on every platform",
+      r.returncode == 0 and "additionalContext" in r.stdout,
+      (r.stdout + r.stderr)[:200])
+cfg["service"] = "apple-music"
+musicdj.save_config(cfg)
 
 # --- MCP server handshake ---
 msgs = [
