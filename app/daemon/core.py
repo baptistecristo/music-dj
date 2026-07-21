@@ -252,6 +252,23 @@ class DJ:
             asyncio.create_task(self.refill())
         return track
 
+    async def reseed(self):
+        """Put the current track back after the tab lost its queue.
+
+        If nothing was playing, start the queue instead -- a reload should
+        never be the reason the music stays off.
+        """
+        if not self.tx.connected:
+            return
+        if not self.current:
+            await self.play_next()
+            return
+        reply = await self.tx.call(
+            {"cmd": "play", "catalogId": self.current["catalogId"]}, timeout=45)
+        if reply.get("error"):
+            log.warning("re-seed failed (%s); moving on", reply["error"])
+            await self.play_next()
+
     # --------------------------------------------------------------- events
 
     async def on_event(self, evt):
@@ -283,18 +300,23 @@ class DJ:
 
         elif kind == "ready":
             self.previews_only = bool(evt.get("previewOnly"))
-            self.notice = ("check which Apple ID is signed in"
-                           if self.previews_only else None)
+            if self.previews_only:
+                # No subscription: playback would be capped at 30s clips, so
+                # say so rather than starting something that cannot work.
+                self.notice = "check which Apple ID is signed in"
+                self.push()
+                return
+            self.notice = None
+            # A reload wipes the MusicKit queue and every listener, so re-seed
+            # what was playing. This hangs off "ready" rather than "injected"
+            # because injected fires at document_start, when MusicKit does not
+            # exist yet and a play command would simply be dropped.
+            await self.reseed()
             self.push()
 
         elif kind in ("injected", "tabReady"):
-            # A reload wipes the MusicKit queue and every listener. Re-seed the
-            # track we believe is current -- this is the most common failure.
+            # The page is back but not necessarily usable yet; wait for ready.
             self.notice = None
-            if self.current:
-                await self.tx.call(
-                    {"cmd": "play", "catalogId": self.current["catalogId"]},
-                    timeout=45)
             self.push()
 
         elif kind in ("tabGone",):

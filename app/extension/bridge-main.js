@@ -218,7 +218,27 @@
     return mk;
   }
 
+  // After a reload the page announces itself long before MusicKit exists, so a
+  // command arriving in that window used to fail outright and the music stayed
+  // dead. Wait for the instance instead of throwing at it.
+  function awaitMk(ms) {
+    if (mk) return Promise.resolve(mk);
+    return new Promise((resolve, reject) => {
+      const deadline = Date.now() + (ms || 15000);
+      const tick = setInterval(() => {
+        if (!mk) mk = instance();
+        if (mk) { clearInterval(tick); resolve(mk); }
+        else if (Date.now() > deadline) {
+          clearInterval(tick);
+          reject(new Error("MusicKit did not load in time"));
+        }
+      }, 200);
+    });
+  }
+
   async function handle(msg) {
+    // "ping" is a liveness check and must answer even on a half-built page.
+    if (msg.cmd !== "ping") await awaitMk();
     switch (msg.cmd) {
       case "search":        return await search(msg.term);
       case "play":          return await play(msg.catalogId);

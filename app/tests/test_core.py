@@ -288,8 +288,50 @@ async def test_a_tab_reload_re_seeds_the_current_track():
     dj = make_dj()
     track = await dj.play_next()
     dj.tx.calls.clear()
-    await dj.on_event({"evt": "injected"})
+    # "ready" is the signal, not "injected": injected fires at document_start
+    # when MusicKit does not exist yet and a play command is simply dropped.
+    await dj.on_event({"evt": "ready", "previewOnly": False})
     assert dj.tx.sent("play")[0]["catalogId"] == track["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_injected_alone_does_not_try_to_play_into_a_half_built_page():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.on_event({"evt": "injected"})
+    assert dj.tx.sent("play") == []
+
+
+@pytest.mark.asyncio
+async def test_a_reload_with_nothing_playing_starts_the_queue():
+    dj = make_dj()
+    await dj.on_event({"evt": "ready", "previewOnly": False})
+    assert dj.tx.sent("play"), "a reload left the music off"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reseed_moves_on_rather_than_going_silent():
+    class DeadTrack(FakeTransport):
+        """The old track no longer resolves; the next one still should."""
+        def __init__(self):
+            super().__init__()
+            self.dead = None
+
+        async def call(self, cmd, timeout=None):
+            if cmd.get("cmd") == "play" and cmd["catalogId"] == self.dead:
+                self.calls.append(cmd)
+                return {"error": "NOT_FOUND"}
+            return await super().call(cmd, timeout)
+
+    tx = DeadTrack()
+    dj = make_dj(tx)
+    track = await dj.play_next()
+    tx.dead = track["catalogId"]
+    tx.calls.clear()
+    await dj.on_event({"evt": "ready", "previewOnly": False})
+    played = [c["catalogId"] for c in tx.sent("play")]
+    assert played[0] == tx.dead and len(played) > 1, "gave up after one failure"
 
 
 @pytest.mark.asyncio

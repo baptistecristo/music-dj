@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #1b1b1f;
+    --text: #f2f2f4;
+    --muted: #8d8d99;
+    --star: #f5c451;
+    --chip: #2c2c34;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font: 12px/1.3 "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* The whole strip drags the window (pywebview easy_drag), so anything
+     clickable has to opt out with .no-drag or the click becomes a drag. */
+  .no-drag { -webkit-app-region: no-drag; }
+
+  #strip {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 0 10px;
+  }
+
+  /* ---- collapsed row: artwork, title/artist, mood chip ---- */
+
+  #row {
+    height: 40px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #art {
+    width: 20px; height: 20px;
+    border-radius: 3px;
+    background: var(--chip);
+    flex: 0 0 20px;
+    object-fit: cover;
+  }
+
+  #track {
+    flex: 1 1 auto;
+    min-width: 0;                 /* lets the ellipsis actually engage */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #track .artist { color: var(--muted); }
+
+  #chip {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 5px;
+    background: var(--chip);
+    border-radius: 10px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  #dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #57c77f;          /* green: the daemon is inferring the mood */
+  }
+
+  #chip.pinned #dot { background: #e0a33e; }   /* amber: you pinned it */
+
+  /* ---- the part that appears on hover ---- */
+
+  #panel {
+    opacity: 0;
+    transition: opacity 120ms ease;
+    pointer-events: none;
+  }
+
+  body.open #panel { opacity: 1; pointer-events: auto; }
+
+  #why {
+    color: var(--muted);
+    font-style: italic;
+    padding: 2px 0 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  #transport { display: flex; gap: 10px; }
+
+  #transport button {
+    background: none; border: none; padding: 0;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  #transport button:hover { color: #fff; }
+
+  #stars { display: flex; gap: 3px; }
+
+  #stars span {
+    color: #4a4a55;
+    font-size: 14px;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  #stars span.on { color: var(--star); }
+
+  #notice {
+    color: var(--muted);
+    font-size: 11px;
+    padding-top: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ---- mood picker ---- */
+
+  #moods {
+    display: none;
+    position: absolute;
+    right: 10px; top: 34px;
+    background: var(--chip);
+    border-radius: 6px;
+    padding: 4px 0;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5);
+    z-index: 10;
+  }
+
+  #moods.show { display: block; }
+
+  #moods div {
+    padding: 4px 14px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  #moods div:hover { background: #3a3a44; }
+
+  body.disconnected #track,
+  body.disconnected #art { opacity: .45; }
+</style>
+</head>
+<body>
+
+<div id="strip">
+  <div id="row">
+    <img id="art" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+    <div id="track"><span class="title">—</span></div>
+    <div id="chip" class="no-drag"><span id="dot"></span><span id="moodname">…</span></div>
+  </div>
+
+  <div id="panel">
+    <div id="why"></div>
+    <div id="controls">
+      <div id="transport" class="no-drag">
+        <button data-act="previous" title="previous">⏮</button>
+        <button data-act="playpause" id="playpause" title="play / pause">⏯</button>
+        <button data-act="skip" title="skip">⏭</button>
+      </div>
+      <div id="stars" class="no-drag"></div>
+    </div>
+    <div id="notice"></div>
+  </div>
+</div>
+
+<div id="moods" class="no-drag"></div>
+
+<script>
+const MOODS = ["coding", "writing", "debugging", "building", "research"];
+
+const el = (id) => document.getElementById(id);
+let state = null;
+let ws = null;
+let backoff = 500;
+let closeTimer = null;
+let open = false;
+
+// ---------------------------------------------------------------- rendering
+
+function render() {
+  const np = state && state.nowPlaying;
+  document.body.classList.toggle("disconnected", !(state && state.connected));
+
+  if (np && np.title) {
+    el("track").innerHTML =
+      '<span class="title"></span> <span class="artist"></span>';
+    el("track").querySelector(".title").textContent = np.title;
+    el("track").querySelector(".artist").textContent =
+      np.artist ? "· " + np.artist : "";
+  } else {
+    el("track").textContent = (state && state.connected) ? "nothing playing" : "no player";
+  }
+
+  el("art").src = (np && np.artworkUrl) ||
+    "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+  const mood = (state && state.mood) || {};
+  el("moodname").textContent = mood.name || "—";
+  el("chip").classList.toggle("pinned", mood.source === "pinned");
+
+  el("why").textContent = (state && state.why) || "";
+  el("notice").textContent = (state && state.notice) || "";
+
+  const rating = (state && state.rating) || 0;
+  el("stars").innerHTML = "";
+  for (let i = 1; i <= 5; i++) {
+    const s = document.createElement("span");
+    s.textContent = "★";
+    s.className = i <= rating ? "on" : "";
+    s.onclick = (e) => { e.stopPropagation(); send({action: "rate", stars: i}); };
+    el("stars").appendChild(s);
+  }
+}
+
+// ------------------------------------------------------------------ socket
+
+function connect() {
+  try {
+    ws = new WebSocket("ws://127.0.0.1:8787/ui");
+  } catch (e) {
+    return setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
+  }
+  ws.onopen = () => { backoff = 500; };
+  ws.onmessage = (ev) => {
+    try { state = JSON.parse(ev.data); render(); } catch (e) {}
+  };
+  ws.onclose = () => {
+    // The daemon may not be up yet, or may have restarted. Keep the last
+    // known track on screen but grey it out rather than blanking the strip.
+    if (state) state.connected = false;
+    render();
+    setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
+  };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+
+function send(msg) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// ---------------------------------------------------------------- expansion
+
+// CSS alone cannot grow a frameless OS window, so the window resize and the
+// height transition have to be driven together.
+function expand() {
+  clearTimeout(closeTimer);
+  if (open) return;
+  open = true;
+  if (window.pywebview) pywebview.api.expand();   // window first, so there is room
+  document.body.classList.add("open");
+}
+
+function collapse() {
+  // Short delay so the panel does not snap shut when the pointer crosses a gap
+  // between the strip and the controls.
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(() => {
+    open = false;
+    el("moods").classList.remove("show");
+    document.body.classList.remove("open");
+    if (window.pywebview) pywebview.api.collapse();
+  }, 250);
+}
+
+document.body.addEventListener("mouseenter", expand);
+document.body.addEventListener("mouseleave", collapse);
+
+// ------------------------------------------------------------------ actions
+
+el("transport").addEventListener("click", (e) => {
+  const act = e.target.dataset.act;
+  if (!act) return;
+  e.stopPropagation();
+  if (act === "playpause") {
+    const playing = state && state.nowPlaying && state.nowPlaying.playing !== false;
+    send({action: playing ? "pause" : "resume"});
+  } else {
+    send({action: act});
+  }
+});
+
+el("chip").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const box = el("moods");
+  if (!box.innerHTML) {
+    MOODS.forEach((m) => {
+      const d = document.createElement("div");
+      d.textContent = m;
+      d.onclick = (ev) => {
+        ev.stopPropagation();
+        send({action: "setMood", mood: m, pinned: true});
+        box.classList.remove("show");
+      };
+      box.appendChild(d);
+    });
+    const unpin = document.createElement("div");
+    unpin.textContent = "↺ follow my activity";
+    unpin.onclick = (ev) => {
+      ev.stopPropagation();
+      send({action: "unpin"});
+      box.classList.remove("show");
+    };
+    box.appendChild(unpin);
+  }
+  box.classList.toggle("show");
+});
+
+document.addEventListener("click", () => el("moods").classList.remove("show"));
+
+render();
+connect();
+</script>
+</body>
+</html>

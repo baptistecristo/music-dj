@@ -181,7 +181,8 @@ async def test_the_extension_can_reconnect_after_a_tab_reload():
         # Tab reloaded: fresh socket, and the daemon re-seeds what was playing.
         async with MockExtension("ws://127.0.0.1:%d/bridge" % port) as ext2:
             await asyncio.sleep(0.1)
-            await ext2.emit({"evt": "injected"})
+            await ext2.emit({"evt": "ready", "storefront": "fr",
+                             "previewOnly": False})
             await asyncio.sleep(0.3)
             assert ext2.played == [track["catalogId"]]
     finally:
