@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the tests only read the checkout. Nothing here needs a
+# token that can write to the repo.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Both OSes on purpose: the plugin ships Windows-specific paths (BOM
+    # handling, the python3 -> python fallback, UTF-8 stdin) that a
+    # Linux-only run would never exercise.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Actions pinned to full commit SHAs, not tags: a tag can be repointed
+      # by its owner after review. Comments record which version each is.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.x'
+
+      - name: Run test suite
+        run: python tests/test_music_dj.py
+
+  lint-installers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check install.sh syntax
+        run: bash -n install.sh
+
+      - name: Check install.ps1 syntax
+        shell: pwsh
+        run: |
+          $errs = @()
+          $null = [System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content install.ps1 -Raw), [ref]$errs)
+          if ($errs.Count -gt 0) {
+            $errs | ForEach-Object { "line $($_.Token.StartLine): $($_.Message)" }
+            exit 1
+          }
+          "install.ps1 parses clean"
+
+      - name: Check manifests are valid JSON
+        run: |
+          python -c "
+          import json
+          for f in ['plugins/music-dj/.claude-plugin/plugin.json',
+                    '.claude-plugin/marketplace.json',
+                    'plugins/music-dj/hooks/hooks.json']:
+              json.load(open(f, encoding='utf-8-sig'))
+              print(f, 'ok')
+          "
