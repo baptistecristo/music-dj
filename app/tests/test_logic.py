@@ -12,6 +12,34 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import library, moods, picker  # noqa: E402
+from daemon.server import origin_allowed  # noqa: E402
+
+
+# ------------------------------------------------------------------- origins
+
+@pytest.mark.parametrize("origin", [
+    "chrome-extension://cpoilmekfofffkmcblfelcdnndkbagom",
+    "moz-extension://abc",
+    "http://127.0.0.1:27628",     # the overlay: pywebview picks a new port each run
+    "http://localhost:5000",
+    "file:///C:/overlay/index.html",
+    None,                         # every non-browser client
+    "",
+])
+def test_the_daemon_accepts_its_own_clients(origin):
+    assert origin_allowed(origin) is True
+
+
+@pytest.mark.parametrize("origin", [
+    "https://evil.com",
+    "https://music.apple.com",    # the player page is not a control surface
+    "http://127.0.0.1.evil.com",  # a registrable domain, not loopback
+    "http://localhost.evil.com",
+])
+def test_the_daemon_turns_away_web_pages(origin):
+    # Browsers do not apply same-origin policy to WebSockets, so any page the
+    # user has open could otherwise reach ws://127.0.0.1 and drive the music.
+    assert origin_allowed(origin) is False
 
 
 PROFILE = """

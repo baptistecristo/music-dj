@@ -4,6 +4,7 @@ import asyncio
 import itertools
 import json
 import logging
+from urllib.parse import urlsplit
 
 import websockets
 from websockets.asyncio.server import serve
@@ -21,11 +22,29 @@ DEFAULT_TIMEOUT = 30
 # all, which is every non-browser client) is the line we draw.
 EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 
+# The overlay is a webview, so it sends an Origin like any browser would --
+# pywebview serves its page from a loopback port that changes every launch, so
+# the host is the only stable part to match on. This does mean a page served
+# from your own machine could reach the daemon; that is a far smaller surface
+# than the open internet, and closing it properly needs a shared token.
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 
 def origin_allowed(origin):
+    """Extensions, loopback pages, and non-browser clients only.
+
+    Matched on the parsed hostname rather than a string prefix: an attacker can
+    register 127.0.0.1.example.com, and "starts with http://127.0.0.1" would
+    wave it straight through.
+    """
     if not origin:
+        return True                      # every non-browser client
+    if origin.startswith(EXTENSION_ORIGINS):
         return True
-    return origin.startswith(EXTENSION_ORIGINS)
+    parts = urlsplit(origin)
+    if parts.scheme == "file":
+        return True
+    return parts.scheme in ("http", "https") and parts.hostname in LOCAL_HOSTS
 
 
 class BridgeTransport:
