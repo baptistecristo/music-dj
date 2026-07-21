@@ -135,6 +135,9 @@ async def repl():
         except ValueError:
             out("!! unbalanced quotes")
             continue
+        # Docs write commands as `play <catalogId>`; people type the brackets.
+        # Strip them rather than sending "<1556503755>" and getting NOT_FOUND.
+        parts = [p.strip("<>") for p in parts]
         verb, args = parts[0].lower(), parts[1:]
 
         if verb in ("quit", "exit"):
