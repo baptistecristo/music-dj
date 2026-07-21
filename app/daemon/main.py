@@ -16,6 +16,14 @@ def setup_logging(verbose):
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S")
+    # websockets logs every frame at DEBUG, and the player sends a position
+    # update every second, so --verbose otherwise buries our own lines under
+    # protocol chatter.
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    # websockets logs every frame at DEBUG, and the player sends a position
+    # update every second, so --verbose otherwise buries our own lines under
+    # protocol chatter.
+    logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
 async def run(args):
