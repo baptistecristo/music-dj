@@ -183,7 +183,14 @@ check("mcp: configure_dj applied",
 check("mcp: configure persisted",
       musicdj.load_config()["playlists"]["coding"] == "Test List")
 np = by_id.get(5, {}).get("result", {})
-check("mcp: now_playing graceful off-mac", "macOS" in np["content"][0]["text"], np)
+np_text = np["content"][0]["text"]
+if sys.platform == "darwin":
+    # On a real Mac osascript actually runs, so the off-mac refusal string is
+    # never produced. Music.app is absent on a CI runner, so the honest
+    # assertion is that we get a string back instead of an exception.
+    check("mcp: now_playing responds on macOS", isinstance(np_text, str) and np_text, np)
+else:
+    check("mcp: now_playing graceful off-mac", "macOS" in np_text, np)
 
 # --- hooks.json schema shape (regression: loader requires top-level "hooks" key) ---
 hj = json.load(open(os.path.join(ROOT, "hooks", "hooks.json")))

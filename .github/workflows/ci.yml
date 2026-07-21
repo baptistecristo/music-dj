@@ -12,13 +12,14 @@ permissions:
 
 jobs:
   test:
-    # Both OSes on purpose: the plugin ships Windows-specific paths (BOM
-    # handling, the python3 -> python fallback, UTF-8 stdin) that a
-    # Linux-only run would never exercise.
+    # All three on purpose. Windows has its own paths (BOM handling, the
+    # python3 -> python fallback, UTF-8 stdin). macOS is the only platform
+    # where is_macos() is true, so it is the only one that exercises the
+    # native AppleScript branch rather than the off-mac refusal.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       # Actions pinned to full commit SHAs, not tags: a tag can be repointed
