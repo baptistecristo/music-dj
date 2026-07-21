@@ -13,7 +13,9 @@ and usage. This file documents the plugin internals.
   taste-profiling template.
 - `hooks/` — PostToolUse / UserPromptSubmit / SessionStart / SessionEnd
   classification of activity into moods (coding, writing, debugging,
-  building, research), debounced and sticky. On macOS switches Apple Music
+  building, research). Signals are weighted (failures shout, doc-glances
+  whisper) and accumulate as decaying per-mood scores, so switching is
+  debounced and sticky without a stray glance derailing it. On macOS switches Apple Music
   natively; elsewhere emits a `[music-dj]` context marker prompting Claude
   to switch via the browser.
 - `server/apple_music_mcp.py` — dependency-free MCP stdio server: config

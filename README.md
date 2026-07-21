@@ -90,7 +90,7 @@ install.ps1 / install.sh      onboarding scripts
 .claude-plugin/marketplace.json   makes this repo a Claude Code marketplace
 plugins/music-dj/             the plugin itself
   skills/music-dj/            the DJ brain + per-service control references
-  hooks/                      activity → mood classification (debounced)
+  hooks/                      activity → mood classification (weighted + debounced)
   server/                     MCP server (config anywhere; AppleScript on macOS)
   lib/                        shared config/classifier/control library
 ```
