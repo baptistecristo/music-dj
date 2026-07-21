@@ -225,3 +225,59 @@ async def test_an_unknown_path_is_rejected():
                 await asyncio.wait_for(ws.recv(), 2)
     finally:
         task.cancel()
+
+
+async def test_track_ended_completes_the_advance_without_deadlocking():
+    """An event handler that issues a command must not block the socket reader.
+
+    trackEnded is delivered on the bridge connection, and handling it sends a
+    "play" back down that same connection. If the read loop waits for the
+    handler to finish, the reply can never be read and the call sits until it
+    times out — so asserting the command was *sent* is not enough, we have to
+    see the advance actually land.
+    """
+    port = PORT + 9
+    dj, tx, task = await boot(port)
+    try:
+        async with MockExtension("ws://127.0.0.1:%d/bridge" % port) as ext:
+            await asyncio.sleep(0.1)
+            first = await dj.play_next()
+            await ext.emit({"evt": "trackEnded", "catalogId": first["catalogId"]})
+            await asyncio.sleep(0.5)
+            assert dj.current is not None
+            assert dj.current["catalogId"] != first["catalogId"]
+    finally:
+        task.cancel()
+
+
+async def test_a_web_page_origin_is_rejected():
+    """Browsers do not apply same-origin policy to WebSockets.
+
+    Without an Origin check, any page the user happens to have open can open
+    ws://127.0.0.1 and drive the daemon — including rating a track five stars,
+    which writes to their real Apple Music playlist.
+    """
+    port = PORT + 10
+    dj, tx, task = await boot(port)
+    try:
+        with pytest.raises(Exception):
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d/ui" % port,
+                    origin="https://evil.example") as ws:
+                await asyncio.wait_for(ws.recv(), 2)
+    finally:
+        task.cancel()
+
+
+async def test_the_extension_origin_is_accepted():
+    port = PORT + 11
+    dj, tx, task = await boot(port)
+    try:
+        async with websockets.connect(
+                "ws://127.0.0.1:%d/bridge" % port,
+                origin="chrome-extension://abcdefghijklmnop") as ws:
+            await asyncio.sleep(0.1)
+            assert tx.connected is True
+            assert ws.state.name == "OPEN"
+    finally:
+        task.cancel()

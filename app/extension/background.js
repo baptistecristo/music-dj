@@ -51,6 +51,10 @@ function connect() {
     return;
   }
 
+  // Captured so that a socket we have already replaced cannot tear down the
+  // live connection's keepalive when its close event finally arrives.
+  const sock = ws;
+
   ws.onopen = () => {
     backoff = 1000;
     log("connected to daemon");
@@ -74,8 +78,13 @@ function connect() {
     }
   };
 
-  ws.onclose = () => { clearInterval(keepaliveTimer); schedule(); };
-  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  ws.onclose = () => {
+    if (ws !== sock) return;          // already superseded; leave the live one alone
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+    schedule();
+  };
+  ws.onerror = () => { try { sock.close(); } catch (_) {} };
 }
 
 function schedule() {
@@ -96,14 +105,22 @@ function send(obj) {
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!msg) return false;
+  // Whichever tab we adopted first stays the one we drive. Reassigning on
+  // every message meant a second signed-in tab could take over mid-command,
+  // and both tabs' playback and trackEnded events landed on one socket with
+  // nothing to tell them apart. onRemoved clears tabId, so a closed tab
+  // still hands over cleanly.
   if (msg.kind === "hello") {
-    if (sender.tab) tabId = sender.tab.id;
+    if (sender.tab && tabId == null) tabId = sender.tab.id;
     connect();
     send({ evt: "tabReady" });
     return false;
   }
   if (msg.kind === "fromPage") {
-    if (sender.tab) tabId = sender.tab.id;
+    if (sender.tab) {
+      if (tabId == null) tabId = sender.tab.id;
+      if (sender.tab.id !== tabId) return false;
+    }
     send(msg.payload);
   }
   return false;

@@ -19,6 +19,7 @@ log = logging.getLogger("music-dj")
 
 SEARCH_TIMEOUT = 20
 RESOLVE_CONCURRENCY = 4
+PLAY_ATTEMPTS = 3       # dead tracks to walk past before giving up on a cycle
 
 
 class DJ:
@@ -44,7 +45,7 @@ class DJ:
         self.notice = None
         self.previews_only = False
         self.listeners = []          # UI push callbacks
-        self._refilling = False
+        self._refill_lock = asyncio.Lock()
 
     # ------------------------------------------------------------- plumbing
 
@@ -127,14 +128,21 @@ class DJ:
 
     async def refill(self):
         """Build a batch, resolve it to catalog ids, store it."""
-        if self._refilling:
-            return
-        self._refilling = True
-        try:
+        # Serialised rather than skipped. A refill arriving while one is in
+        # flight is usually a mood change, and dropping it left the new mood
+        # holding the empty queue set_mood() just built, with nothing playing.
+        async with self._refill_lock:
             mood, lane = self.mood, self.lane
             picks = self.picks_for(mood, lane) or []
             source = picks[0].get("source", "profile") if picks else "profile"
             resolved = await self.resolve(picks)
+
+            if (self.mood, self.lane) != (mood, lane):
+                # Resolving took long enough for the mood to move on. Writing
+                # this batch would label the new queue with the old mood.
+                log.info("dropping stale refill for %s/%s", mood, lane)
+                return
+
             resolved = library.dedupe_picks(
                 resolved, self.history,
                 already_queued=library.queue_tracks(self.queue))
@@ -146,8 +154,6 @@ class DJ:
             self.queue = library.make_queue(keep, mood, lane, source, self.now())
             store.write_json(store.QUEUE, self.queue)
             log.info("queue refilled: %d tracks (%s)", len(keep), source)
-        finally:
-            self._refilling = False
 
     async def resolve(self, picks):
         """Pick -> playable track, via search inside the tab."""
@@ -202,20 +208,37 @@ class DJ:
         if library.needs_refill(self.queue):
             await self.refill()
 
-        track, rest = library.advance(self.queue)
-        if not track:
-            log.warning("queue empty after refill; nothing to play")
-            self.notice = "nothing to play"
-            self.push()
-            return None
+        # A track is popped before we try to play it, so bailing out on an
+        # error would leave nothing playing and no trackEnded on the way —
+        # the daemon would simply go quiet. Walk past dead tracks instead,
+        # but stop after a few so an unusable player can't eat the queue.
+        track = None
+        for _ in range(PLAY_ATTEMPTS):
+            track, rest = library.advance(self.queue)
+            if not track:
+                log.warning("queue empty after refill; nothing to play")
+                self.notice = "nothing to play"
+                self.push()
+                return None
 
-        self.queue = rest
-        store.write_json(store.QUEUE, self.queue)
+            self.queue = rest
+            store.write_json(store.QUEUE, self.queue)
 
-        reply = await self.tx.call({"cmd": "play", "catalogId": track["catalogId"]},
-                                   timeout=45)
-        if reply.get("error"):
+            reply = await self.tx.call({"cmd": "play", "catalogId": track["catalogId"]},
+                                       timeout=45)
+            if not reply.get("error"):
+                break
+
             log.warning("play failed for %s: %s", track.get("title"), reply["error"])
+            self.notice = "skipped %s (%s)" % (track.get("title"), reply["error"])
+            track = None
+            if not self.tx.connected:
+                # The player is gone; burning the rest of the queue against a
+                # dead socket helps nobody.
+                break
+
+        if track is None:
+            self.push()
             return None
 
         self.current = track

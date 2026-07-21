@@ -204,14 +204,22 @@
     return { ok: true };
   }
 
+  // Commands that touch the player have to say so when there is no player.
+  // Reporting a cheerful ok:true for a no-op leaves the daemon believing
+  // music is running, and it will not retry something it thinks worked.
+  function ready() {
+    if (!mk) throw new Error("MusicKit not ready");
+    return mk;
+  }
+
   async function handle(msg) {
     switch (msg.cmd) {
       case "search":        return await search(msg.term);
       case "play":          return await play(msg.catalogId);
-      case "pause":         mk.pause(); return { ok: true };
-      case "resume":        kick(); return { ok: true };
-      case "skip":          await mk.skipToNextItem(); return { ok: true };
-      case "previous":      await mk.skipToPreviousItem(); return { ok: true };
+      case "pause":         ready().pause(); return { ok: true };
+      case "resume":        ready(); kick(); return { ok: true, state: mk.playbackState };
+      case "skip":          await ready().skipToNextItem(); return { ok: true };
+      case "previous":      await ready().skipToPreviousItem(); return { ok: true };
       case "listPlaylists": return await listPlaylists();
       case "playlistTracks":return await playlistTrackIds(msg.playlistId);
       case "createPlaylist":return await createPlaylist(msg.name);

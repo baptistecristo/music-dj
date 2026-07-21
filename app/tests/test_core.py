@@ -34,6 +34,7 @@ class FakeTransport:
         self.calls = []
         self.fail_search = False
         self.fail_play = False
+        self.search_delay = 0
         self.empty_search = False
         self.playlist_tracks = []
         self.counter = 0
@@ -43,6 +44,8 @@ class FakeTransport:
         kind = cmd.get("cmd")
 
         if kind == "search":
+            if self.search_delay:
+                await asyncio.sleep(self.search_delay)
             if self.fail_search:
                 return {"error": "no tab"}
             if self.empty_search:
@@ -458,3 +461,39 @@ async def test_a_picker_that_returns_nothing_does_not_hang_playback():
                  rng=random.Random(0), picks_for=lambda m, l: [])
     assert await dj.play_next() is None
     assert dj.ui_state()["notice"] == "nothing to play"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_play_moves_on_instead_of_going_silent():
+    """A dead track must not end the session.
+
+    play_next() pops the track before asking the extension to play it, so
+    bailing out on an error leaves nothing playing and no trackEnded coming —
+    the daemon just goes quiet until a human intervenes.
+    """
+    tx = FakeTransport()
+    tx.fail_play = True
+    dj = make_dj(tx)
+    assert await dj.play_next() is None
+    assert len(tx.sent("play")) > 1, "gave up after a single bad track"
+    assert dj.notice, "the failure was never surfaced"
+
+
+@pytest.mark.asyncio
+async def test_a_mood_change_during_a_refill_is_not_dropped():
+    """A refill in flight must not swallow the next mood change.
+
+    The guard against concurrent refills used to make the second call a
+    no-op, so a mood change landing mid-refill rebuilt an empty queue, found
+    nothing to play, and stalled — then the in-flight refill finished and
+    wrote its now-stale mood over the new one.
+    """
+    tx = FakeTransport()
+    tx.search_delay = 0.2
+    dj = make_dj(tx)
+    inflight = asyncio.create_task(dj.refill())
+    await asyncio.sleep(0.05)
+    await dj.set_mood("debugging")
+    await inflight
+    assert dj.queue["mood"] == "debugging", "a stale refill overwrote the new mood"
+    assert library.queue_tracks(dj.queue), "queue left empty after the mood change"

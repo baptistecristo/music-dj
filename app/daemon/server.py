@@ -14,6 +14,19 @@ HOST = "127.0.0.1"
 PORT = 8787
 DEFAULT_TIMEOUT = 30
 
+# Browsers do not apply same-origin policy to WebSockets, so binding to
+# localhost keeps nothing out on its own: any page the user has open can
+# reach ws://127.0.0.1 and start issuing commands. What a page cannot do is
+# forge or drop the Origin header, so an extension origin (or no origin at
+# all, which is every non-browser client) is the line we draw.
+EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
+
+
+def origin_allowed(origin):
+    if not origin:
+        return True
+    return origin.startswith(EXTENSION_ORIGINS)
+
 
 class BridgeTransport:
     """Request/reply over the extension socket, correlated by id.
@@ -27,6 +40,7 @@ class BridgeTransport:
         self.pending = {}
         self._ids = itertools.count(1)
         self.on_event = None          # set by the daemon
+        self._handlers = set()        # live event-handler tasks, see dispatch()
 
     @property
     def connected(self):
@@ -72,7 +86,18 @@ class BridgeTransport:
         if msg.get("evt") == "keepalive":
             return
         if self.on_event:
-            await self.on_event(msg)
+            # Handlers issue commands back over this same socket, and their
+            # replies can only be read by the loop that called us. Awaiting
+            # the handler here would park that loop until its own reply timed
+            # out, so every trackEnded stalled the advance it triggered.
+            task = asyncio.create_task(self.on_event(msg))
+            self._handlers.add(task)
+            task.add_done_callback(self._handler_done)
+
+    def _handler_done(self, task):
+        self._handlers.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("event handler failed", exc_info=task.exception())
 
 
 class Server:
@@ -95,6 +120,12 @@ class Server:
             self.ui_clients.discard(ws)
 
     async def handler(self, conn):
+        origin = conn.request.headers.get("Origin")
+        if not origin_allowed(origin):
+            log.warning("rejected connection from origin %s", origin)
+            await conn.close(code=1008, reason="origin not allowed")
+            return
+
         path = conn.request.path
         if path.startswith("/bridge"):
             await self._bridge(conn)
