@@ -25,18 +25,27 @@ log = logging.getLogger("music-dj.overlay")
 
 
 class Api:
-    """Called from the page. Keep these cheap: they run on the UI thread."""
+    """Called from the page. Keep these cheap: they run on the UI thread.
 
-    def __init__(self):
-        self.window = None
+    Deliberately holds no reference to the window. pywebview introspects this
+    object's attributes to expose them to JavaScript, and a Window here sends it
+    walking into the native .NET form -- AccessibilityObject.Bounds.Empty.Empty
+    forever, until the stack gives out. Reach the window through the module
+    instead.
+    """
+
+    def _window(self):
+        return webview.windows[0] if webview.windows else None
 
     def expand(self):
-        if self.window:
-            self.window.resize(*EXPANDED)
+        win = self._window()
+        if win:
+            win.resize(*EXPANDED)
 
     def collapse(self):
-        if self.window:
-            self.window.resize(*COLLAPSED)
+        win = self._window()
+        if win:
+            win.resize(*COLLAPSED)
 
 
 def saved_position(config):
@@ -64,7 +73,9 @@ def remember_position(window):
         except Exception:
             log.debug("could not save overlay position", exc_info=True)
 
-    def on_move():
+    def on_move(*_args):
+        # pywebview passes coordinates on some backends and nothing on others,
+        # so swallow whatever arrives and read the window instead.
         if pending["timer"]:
             pending["timer"].cancel()
         pending["timer"] = threading.Timer(0.6, store_it)
@@ -106,9 +117,8 @@ def main():
         background_color="#1b1b1f",
         shadow=False,
     )
-    api.window = window
     save_now = remember_position(window)
-    window.events.closing += lambda: save_now()
+    window.events.closing += lambda *_a: save_now()
 
     webview.start()
 
