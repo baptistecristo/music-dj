@@ -45,6 +45,7 @@ class DJ:
         self.notice = None
         self.previews_only = False
         self.autoplay_blocked = False
+        self.playing = False
         self.listeners = []          # UI push callbacks
         self._refill_lock = asyncio.Lock()
         # Confirming a play takes several seconds. Without this, a mood change
@@ -78,6 +79,9 @@ class DJ:
                 "artworkUrl": (self.current or {}).get("artworkUrl"),
                 "position": (self.current or {}).get("position", 0),
                 "duration": (self.current or {}).get("duration", 0),
+                # So the overlay's play/pause button shows the action it will
+                # take, rather than guessing.
+                "playing": self.playing,
             } if self.current else None,
             "mood": {"name": self.mood, "lane": self.lane,
                      "source": "pinned" if self.pinned else "claude"},
@@ -333,6 +337,9 @@ class DJ:
         elif kind == "playback":
             # State 2 is "playing", so audio is coming out and whatever the
             # browser was blocking, it isn't blocking any more.
+            # 2 is playing, 3 is paused; the rest are transitional.
+            if evt.get("state") in (2, 3):
+                self.playing = evt.get("state") == 2
             if evt.get("state") == 2 and self.autoplay_blocked:
                 log.info("audio is flowing again; autoplay unblocked")
                 self.autoplay_blocked = False
@@ -401,6 +408,10 @@ class DJ:
                 await self.play_next()      # our queue, not Apple's
             else:
                 await self.tx.call({"cmd": action})
+                # Reflect it straight away rather than waiting for the player
+                # to report back, so the button never lags the click.
+                if action in ("pause", "resume"):
+                    self.playing = action == "resume"
             self.push()
 
         elif action == "rate":

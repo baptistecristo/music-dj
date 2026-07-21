@@ -3,12 +3,29 @@
 <head>
 <meta charset="utf-8">
 <style>
+  /* ------------------------------------------------------------------ tokens
+     Collapsed, this is a record sleeve sitting on the desk: cover only.
+     Hovered, it slides open into liner notes. The why-line is the reason this
+     exists rather than any other now-playing widget, so it is set as a margin
+     note against a gold rule instead of buried in muted italic. */
+
   :root {
     --bg: #1b1b1f;
+    --raised: #212128;
     --text: #f2f2f4;
     --muted: #8d8d99;
-    --star: #f5c451;
+    --dim: #5c5c68;
+    --gold: #f5c451;
     --chip: #2c2c34;
+    --hairline: #32323c;
+    --green: #57c77f;
+    --amber: #e0a33e;
+
+    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --utility: "Bahnschrift", "Segoe UI", sans-serif;
+    /* Ships with Windows; renders transport marks as crisp vector glyphs
+       rather than the colour emoji the unicode media symbols fall back to. */
+    --icons: "Segoe Fluent Icons", "Segoe MDL2 Assets";
   }
 
   * { box-sizing: border-box; }
@@ -18,214 +35,305 @@
     height: 100%; overflow: hidden;
     background: var(--bg);
     color: var(--text);
-    font: 12px/1.3 "Segoe UI", system-ui, sans-serif;
+    font-family: var(--display);
+    font-size: 12px;
     user-select: none;
     cursor: default;
   }
 
   /* Dragging is opt-in: pywebview moves the window only when a click lands
-     directly on .pywebview-drag-region. Controls simply are not tagged, so
-     they stay clickable. (-webkit-app-region is an Electron thing and does
-     nothing here; .no-drag is kept only as a readable marker.) */
+     directly on .pywebview-drag-region, so controls stay clickable simply by
+     not being tagged. */
 
-  #strip {
+  #shell {
     height: 100%;
     display: flex;
-    flex-direction: column;
-    padding: 0 10px;
+    gap: 12px;
+    padding: 8px;
+    background: var(--bg);
   }
 
-  /* ---- collapsed row: artwork, title/artist, mood chip ---- */
+  body:not(.open) #shell { padding: 0; gap: 0; }
 
-  #row {
-    height: 40px;
-    min-height: 40px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  /* ------------------------------------------------------------------- cover */
+
+  #cover {
+    position: relative;
+    flex: 0 0 auto;
+    width: 56px; height: 56px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--chip);
+    /* A sleeve edge, not a drop shadow: one inset hairline. */
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.09);
+    transition: width 160ms ease, height 160ms ease, border-radius 160ms ease;
+  }
+
+  /* Collapsed, the cover IS the window: pinned to all four edges so nothing
+     of the shell shows around it, and no ring or rounding on top of the art. */
+  body:not(.open) #shell { display: block; }
+
+  body:not(.open) #cover {
+    position: absolute;
+    inset: 0;
+    width: auto; height: auto;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   #art {
-    width: 28px; height: 28px;
-    border-radius: 4px;
-    background: var(--chip);
-    flex: 0 0 28px;
+    width: 100%; height: 100%;
     object-fit: cover;
+    display: block;
   }
 
-  /* Collapsed, the artwork is the whole strip: a cover is recognisable at a
-     glance in a way a truncated title never is. The name lives in the panel. */
-  body:not(.open) #track,
-  body:not(.open) #chip { display: none; }
+  body.disconnected #art { opacity: .4; filter: grayscale(1); }
 
-  body:not(.open) #row { justify-content: center; }
+  /* Mood dot rides the cover while collapsed: green inferred, amber pinned. */
+  #minidot {
+    position: absolute;
+    top: 5px; right: 5px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 2px rgba(0,0,0,.55);
+  }
 
-  /* Fill the tile when collapsed: at 48px there is no room for chrome. */
-  body:not(.open) #strip { padding: 0; }
-  body:not(.open) #row { height: 48px; }
-  body:not(.open) #art { width: 40px; height: 40px; flex-basis: 40px; }
+  #minidot.pinned { background: var(--amber); }
+  body.open #minidot { opacity: 0; }
 
-  #track {
+  /* Real information, not decoration: how far through the track we are. */
+  #progress {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    background: rgba(255,255,255,.14);
+  }
+
+  #progress i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--gold);
+    transition: width 900ms linear;
+  }
+
+  /* -------------------------------------------------------------- liner notes */
+
+  #notes {
     flex: 1 1 auto;
-    min-width: 0;                 /* lets the ellipsis actually engage */
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: opacity 140ms ease 40ms, transform 180ms ease 40ms;
+    pointer-events: none;
+  }
+
+  body.open #notes { opacity: 1; transform: none; pointer-events: auto; }
+  body:not(.open) #notes { display: none; }
+
+  #head {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  #naming { flex: 1 1 auto; min-width: 0; }
+
+  #title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -.012em;
+    line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  /* The mood dot stays visible while collapsed, tucked onto the artwork, so
-     you can still tell a pinned mood from an inferred one at a glance. */
-  #minidot {
-    position: absolute;
-    top: 6px; right: 6px;
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: #57c77f;
-    box-shadow: 0 0 0 2px var(--bg);
+  #artist {
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-
-  #minidot.pinned { background: #e0a33e; }
-
-  body.open #minidot { display: none; }
-
-  #track .artist { color: var(--muted); }
 
   #chip {
     flex: 0 0 auto;
     display: flex; align-items: center; gap: 5px;
     background: var(--chip);
-    border-radius: 10px;
-    padding: 3px 8px;
-    font-size: 11px;
+    border-radius: 3px;
+    padding: 3px 7px;
+    font-family: var(--utility);
+    font-size: 9.5px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--muted);
     cursor: pointer;
   }
 
+  #chip:hover { color: var(--text); }
+
   #dot {
-    width: 6px; height: 6px;
+    width: 5px; height: 5px;
     border-radius: 50%;
-    background: #57c77f;          /* green: the daemon is inferring the mood */
+    background: var(--green);
   }
 
-  #chip.pinned #dot { background: #e0a33e; }   /* amber: you pinned it */
+  #chip.pinned #dot { background: var(--amber); }
 
-  /* ---- the part that appears on hover ---- */
-
-  #panel {
-    opacity: 0;
-    transition: opacity 120ms ease;
-    pointer-events: none;
-  }
-
-  body.open #panel { opacity: 1; pointer-events: auto; }
-
+  /* The signature: Claude's stated reason, set as a margin note. */
   #why {
+    margin: 7px 0 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--gold);
     color: var(--muted);
+    font-size: 11px;
     font-style: italic;
-    padding: 2px 0 8px;
-    white-space: nowrap;
+    line-height: 1.35;
+    max-height: 30px;
     overflow: hidden;
-    text-overflow: ellipsis;
   }
+
+  #why:empty { display: none; }
+
+  /* ----------------------------------------------------------------- controls */
 
   #controls {
+    margin-top: auto;
+    padding-top: 8px;
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
 
-  #transport { display: flex; gap: 10px; }
+  #transport { display: flex; align-items: center; gap: 12px; }
 
   #transport button {
     background: none; border: none; padding: 0;
-    color: var(--text);
-    font-size: 14px;
+    font-family: var(--icons);
+    font-size: 12px;
+    color: var(--muted);
     cursor: pointer;
     line-height: 1;
+    transition: color 100ms ease;
   }
 
-  #transport button:hover { color: #fff; }
+  #transport button:hover { color: var(--text); }
+  #transport button:focus-visible { outline: 1px solid var(--gold); outline-offset: 3px; }
+  #playpause { font-size: 15px; color: var(--text); }
 
-  #stars { display: flex; gap: 3px; }
+  #stars { display: flex; gap: 2px; }
 
   #stars span {
-    color: #4a4a55;
-    font-size: 14px;
+    color: var(--dim);
+    font-size: 12px;
     cursor: pointer;
     line-height: 1;
+    transition: color 90ms ease;
   }
 
-  #stars span.on { color: var(--star); }
+  #stars span.on { color: var(--gold); }
+  #stars:hover span { color: var(--dim); }
+  #stars span:hover, #stars span:hover ~ span { color: var(--gold); }
+  /* Hover fills left-to-right, so the row previews the rating you'd give. */
+  #stars { flex-direction: row-reverse; }
 
   #notice {
-    color: var(--muted);
-    font-size: 11px;
-    padding-top: 6px;
+    color: var(--dim);
+    font-family: var(--utility);
+    font-size: 10px;
+    letter-spacing: .04em;
+    padding-top: 5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  /* ---- mood picker ---- */
+  #notice:empty { display: none; }
+
+  /* ------------------------------------------------------------ mood picker */
 
   #moods {
     display: none;
     position: absolute;
-    right: 10px; top: 34px;
-    background: var(--chip);
-    border-radius: 6px;
-    padding: 4px 0;
-    box-shadow: 0 4px 14px rgba(0,0,0,.5);
+    right: 8px; top: 30px;
+    background: var(--raised);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 3px 0;
+    box-shadow: 0 8px 20px rgba(0,0,0,.55);
     z-index: 10;
+    min-width: 116px;
   }
 
   #moods.show { display: block; }
 
   #moods div {
-    padding: 4px 14px;
-    font-size: 11px;
+    padding: 5px 12px;
+    font-family: var(--utility);
+    font-size: 10.5px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
     cursor: pointer;
-    white-space: nowrap;
   }
 
-  #moods div:hover { background: #3a3a44; }
+  #moods div:hover { background: var(--chip); color: var(--text); }
+  #moods div.sep { border-top: 1px solid var(--hairline); margin-top: 3px; padding-top: 6px; }
 
-  body.disconnected #track,
-  body.disconnected #art { opacity: .45; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
 
-<div id="strip" class="pywebview-drag-region">
-  <div id="row" class="pywebview-drag-region">
-    <img id="art" class="pywebview-drag-region" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
-    <div id="track" class="pywebview-drag-region"><span class="title">—</span></div>
-    <div id="chip" class="no-drag"><span id="dot"></span><span id="moodname">…</span></div>
+<div id="shell" class="pywebview-drag-region">
+  <div id="cover" class="pywebview-drag-region">
+    <img id="art" class="pywebview-drag-region"
+         src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+    <div id="minidot"></div>
+    <div id="progress"><i id="bar"></i></div>
   </div>
-  <div id="minidot"></div>
 
-  <div id="panel" class="pywebview-drag-region">
-    <div id="why" class="pywebview-drag-region"></div>
-    <div id="controls" class="pywebview-drag-region">
-      <div id="transport" class="no-drag">
-        <button data-act="previous" title="previous">⏮</button>
-        <button data-act="playpause" id="playpause" title="play / pause">⏯</button>
-        <button data-act="skip" title="skip">⏭</button>
+  <div id="notes" class="pywebview-drag-region">
+    <div id="head" class="pywebview-drag-region">
+      <div id="naming" class="pywebview-drag-region">
+        <div id="title" class="pywebview-drag-region">Nothing playing</div>
+        <div id="artist" class="pywebview-drag-region"></div>
       </div>
-      <div id="stars" class="no-drag"></div>
+      <div id="chip"><span id="dot"></span><span id="moodname">—</span></div>
     </div>
+
+    <div id="why" class="pywebview-drag-region"></div>
+
+    <div id="controls" class="pywebview-drag-region">
+      <div id="transport">
+        <button data-act="previous" title="Previous">&#xE892;</button>
+        <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
+        <button data-act="skip" title="Next">&#xE893;</button>
+      </div>
+      <div id="stars"></div>
+    </div>
+
     <div id="notice" class="pywebview-drag-region"></div>
   </div>
 </div>
 
-<div id="moods" class="no-drag"></div>
+<div id="moods"></div>
 
 <script>
 const MOODS = ["coding", "writing", "debugging", "building", "research"];
+const PLAY = "", PAUSE = "";
 
 const el = (id) => document.getElementById(id);
 let state = null;
 let ws = null;
-let socketUp = false;      // is the daemon reachable at all?
+let socketUp = false;       // is the daemon reachable at all?
 let backoff = 500;
 let closeTimer = null;
 let open = false;
@@ -237,38 +345,46 @@ function render() {
   document.body.classList.toggle("disconnected", !(state && state.connected));
 
   if (np && np.title) {
-    el("track").innerHTML =
-      '<span class="title"></span> <span class="artist"></span>';
-    el("track").querySelector(".title").textContent = np.title;
-    el("track").querySelector(".artist").textContent =
-      np.artist ? "· " + np.artist : "";
-  } else if (!socketUp) {
-    // Nothing has ever arrived: the daemon is not running, which is a
-    // different problem from the browser tab being closed.
-    el("track").textContent = "daemon not running";
+    el("title").textContent = np.title;
+    el("artist").textContent = np.artist || "";
   } else {
-    el("track").textContent = state && state.connected
-      ? "nothing playing" : "no DJ tab open";
+    // An empty state should say what to do, not just report a void.
+    el("title").textContent = !socketUp ? "Daemon not running"
+      : (state && state.connected) ? "Nothing playing" : "No DJ tab open";
+    el("artist").textContent = !socketUp ? "Start it in your terminal"
+      : (state && state.connected) ? "" : "Open music.apple.com";
   }
 
   el("art").src = (np && np.artworkUrl) ||
     "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+  const pct = (np && np.duration) ? Math.min(100, (np.position / np.duration) * 100) : 0;
+  el("bar").style.width = pct + "%";
+
+  const playing = !!(np && np.playing);
+  el("playpause").textContent = playing ? PAUSE : PLAY;
+  el("playpause").title = playing ? "Pause" : "Play";
 
   const mood = (state && state.mood) || {};
   el("moodname").textContent = mood.name || "—";
   const pinned = mood.source === "pinned";
   el("chip").classList.toggle("pinned", pinned);
   el("minidot").classList.toggle("pinned", pinned);
+  el("chip").title = pinned
+    ? "You pinned this mood. Click to change or follow your activity again."
+    : "Following your activity. Click to pin a mood.";
 
   el("why").textContent = (state && state.why) || "";
   el("notice").textContent = (state && state.notice) || "";
 
   const rating = (state && state.rating) || 0;
   el("stars").innerHTML = "";
-  for (let i = 1; i <= 5; i++) {
+  // Reversed in the DOM so CSS can light up every star to the left on hover.
+  for (let i = 5; i >= 1; i--) {
     const s = document.createElement("span");
     s.textContent = "★";
     s.className = i <= rating ? "on" : "";
+    s.title = i + (i === 1 ? " star" : " stars");
     s.onclick = (e) => { e.stopPropagation(); send({action: "rate", stars: i}); };
     el("stars").appendChild(s);
   }
@@ -287,8 +403,6 @@ function connect() {
     try { state = JSON.parse(ev.data); render(); } catch (e) {}
   };
   ws.onclose = () => {
-    // The daemon may not be up yet, or may have restarted. Keep the last
-    // known track on screen but grey it out rather than blanking the strip.
     socketUp = false;
     if (state) state.connected = false;
     render();
@@ -303,20 +417,20 @@ function send(msg) {
 
 // ---------------------------------------------------------------- expansion
 
-// CSS alone cannot grow a frameless OS window, so the window resize and the
-// height transition have to be driven together.
+// CSS cannot grow a frameless OS window, so the resize and the reveal are
+// driven together: window first so there is room, then the content fades in.
 function expand() {
   clearTimeout(closeTimer);
   if (open) return;
   open = true;
-  if (window.pywebview) pywebview.api.expand();   // window first, so there is room
+  if (window.pywebview) pywebview.api.expand();
   document.body.classList.add("open");
 }
 
 function collapse() {
-  // Short delay so the panel does not snap shut when the pointer crosses a gap
-  // between the strip and the controls.
   clearTimeout(closeTimer);
+  // Short delay so the panel does not snap shut when the pointer crosses the
+  // gap between the cover and the controls.
   closeTimer = setTimeout(() => {
     open = false;
     el("moods").classList.remove("show");
@@ -331,11 +445,12 @@ document.body.addEventListener("mouseleave", collapse);
 // ------------------------------------------------------------------ actions
 
 el("transport").addEventListener("click", (e) => {
-  const act = e.target.dataset.act;
-  if (!act) return;
+  const btn = e.target.closest("button");
+  if (!btn) return;
   e.stopPropagation();
+  const act = btn.dataset.act;
   if (act === "playpause") {
-    const playing = state && state.nowPlaying && state.nowPlaying.playing !== false;
+    const playing = !!(state && state.nowPlaying && state.nowPlaying.playing);
     send({action: playing ? "pause" : "resume"});
   } else {
     send({action: act});
@@ -357,7 +472,8 @@ el("chip").addEventListener("click", (e) => {
       box.appendChild(d);
     });
     const unpin = document.createElement("div");
-    unpin.textContent = "↺ follow my activity";
+    unpin.textContent = "Follow my activity";
+    unpin.className = "sep";
     unpin.onclick = (ev) => {
       ev.stopPropagation();
       send({action: "unpin"});
