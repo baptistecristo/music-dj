@@ -157,7 +157,12 @@ class DJ:
         # holding the empty queue set_mood() just built, with nothing playing.
         async with self._refill_lock:
             mood, lane = self.mood, self.lane
-            picks = self.picks_for(mood, lane) or []
+            # The Claude picker shells out and can sit there for 15s. Run it
+            # off the event loop or playback events queue up behind it and the
+            # music stutters between tracks.
+            loop = asyncio.get_running_loop()
+            picks = await loop.run_in_executor(
+                None, self.picks_for, mood, lane) or []
             source = picks[0].get("source", "profile") if picks else "profile"
             resolved = await self.resolve(picks)
 

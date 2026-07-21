@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import logging
 
-from . import core, server, store
+from . import advisor, core, server, store
 
 
 def setup_logging(verbose):
@@ -30,6 +30,12 @@ async def run(args):
     config = store.read_json(store.CONFIG, {})
     transport = server.BridgeTransport()
     dj = core.DJ(transport, config=config)
+
+    if not args.no_claude:
+        # Claude picks the batch; the profile stays underneath as the fallback
+        # whenever the CLI is missing, slow, or unhelpful.
+        dj.picks_for = lambda mood, lane: advisor.picks_for(
+            mood, lane, seeds=dj.seeds, rng=dj.rng)
     transport.on_event = dj.on_event
 
     srv = server.Server(dj, transport, port=args.port)
@@ -51,6 +57,8 @@ def main():
     parser = argparse.ArgumentParser(prog="music-dj daemon")
     parser.add_argument("--port", type=int, default=server.PORT)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--no-claude", action="store_true",
+                        help="pick from the taste profile only")
     args = parser.parse_args()
     setup_logging(args.verbose)
     try:

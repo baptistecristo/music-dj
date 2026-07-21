@@ -5,17 +5,19 @@
 <style>
   /* ------------------------------------------------------------------ tokens
      Collapsed, this is a record sleeve sitting on the desk: cover only.
-     Hovered, it slides open into liner notes. The why-line is the reason this
-     exists rather than any other now-playing widget, so it is set as a margin
-     note against a gold rule instead of buried in muted italic. */
+     Hovered, it opens into an Apple Music-shaped mini player -- art and naming
+     on top, a full-width scrubber under it, transport centred below. The
+     why-line is the reason this exists rather than any other now-playing
+     widget, so it keeps its gold rule instead of being dropped for symmetry. */
 
   :root {
     --bg: #1b1b1f;
     --raised: #212128;
     --text: #f2f2f4;
-    --muted: #8d8d99;
-    --dim: #5c5c68;
+    --muted: #9a9aa6;
+    --dim: #62626e;
     --gold: #f5c451;
+    --love: #fa586a;
     --chip: #2c2c34;
     --hairline: #32323c;
     --green: #57c77f;
@@ -50,8 +52,8 @@
   #shell {
     height: 100%;
     display: flex;
-    gap: 12px;
-    padding: 9px;
+    flex-direction: column;
+    padding: 11px;
     border-radius: 10px;
     /* Glass: tinted enough to keep text legible over a bright desktop, and
        saturated so album colours behind it stay alive rather than going grey. */
@@ -68,7 +70,7 @@
 
   /* Collapsed there is nothing but the cover: no glass, no padding, no edge. */
   body:not(.open) #shell {
-    padding: 0; gap: 0;
+    padding: 0;
     background: transparent;
     backdrop-filter: none;
     box-shadow: none;
@@ -77,11 +79,18 @@
 
   /* ------------------------------------------------------------------- cover */
 
+  #head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    flex: 0 0 auto;
+  }
+
   #cover {
     position: relative;
     flex: 0 0 auto;
-    width: 56px; height: 56px;
-    border-radius: 5px;
+    width: 60px; height: 60px;
+    border-radius: 6px;
     overflow: hidden;
     background: var(--chip);
     /* A sleeve edge, not a drop shadow: one inset hairline. */
@@ -109,64 +118,146 @@
 
   body.disconnected #art { opacity: .4; filter: grayscale(1); }
 
-  /* Real information, not decoration: how far through the track we are. */
-  #progress {
-    margin-top: 7px;
-    height: 2px;
-    border-radius: 1px;
-    background: rgba(255,255,255,.10);
-  }
+  /* --------------------------------------------------------------- the panel
 
-  #progress i {
-    display: block;
-    height: 100%;
-    width: 0%;
-    background: var(--gold);
-    transition: width 900ms linear;
-  }
+     Everything except the cover only exists once the window has grown. */
 
-  /* -------------------------------------------------------------- liner notes */
-
-  #notes {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
+  .panel {
     opacity: 0;
-    transform: translateX(-4px);
+    transform: translateY(-3px);
     transition: opacity 140ms ease 40ms, transform 180ms ease 40ms;
     pointer-events: none;
   }
 
-  body.open #notes { opacity: 1; transform: none; pointer-events: auto; }
-  body:not(.open) #notes { display: none; }
+  body.open .panel { opacity: 1; transform: none; pointer-events: auto; }
+  body:not(.open) .panel { display: none; }
 
-  #head {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-  }
+  /* -------------------------------------------------------------- the naming */
 
   #naming { flex: 1 1 auto; min-width: 0; }
 
   #title {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     letter-spacing: -.012em;
-    line-height: 1.25;
+    line-height: 1.3;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  #artist {
+  #sub {
     color: var(--muted);
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 1.35;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* The signature: Claude's stated reason, set as a margin note. Capped at two
+     lines so the window height stays predictable. */
+  #why {
+    margin: 8px 0 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--gold);
+    color: var(--muted);
+    font-size: 11px;
+    font-style: italic;
+    line-height: 1.3;
+    max-height: 29px;
+    overflow: hidden;
+    flex: 0 0 auto;
+  }
+
+  #why:empty { display: none; }
+
+  /* ---------------------------------------------------------- the scrubber */
+
+  #prow {
+    margin-top: 9px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  .clock {
+    flex: 0 0 auto;
+    min-width: 30px;
+    font-family: var(--utility);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .02em;
+    color: var(--dim);
+    line-height: 1;
+  }
+
+  #remain { text-align: right; }
+
+  #progress {
+    flex: 1 1 auto;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,.16);
+    overflow: hidden;
+  }
+
+  #bar {
+    display: block;
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: rgba(255,255,255,.88);
+    transition: width 900ms linear;
+  }
+
+  /* ----------------------------------------------------------------- controls
+
+     Three tracks: opinions left, transport dead centre, mood right. The centre
+     column is absolutely centred against the row rather than the leftover
+     space, so the play button does not drift when the mood name changes. */
+
+  #controls {
+    margin-top: 9px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 26px;
+    flex: 0 0 auto;
+  }
+
+  #opinions { display: flex; align-items: center; gap: 8px; }
+
+  #transport {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  #controls button {
+    background: none; border: none; padding: 0;
+    font-family: var(--icons);
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+    transition: color 100ms ease;
+  }
+
+  #controls button:hover { color: var(--text); }
+  #controls button:focus-visible { outline: 1px solid var(--gold); outline-offset: 3px; }
+
+  #playpause { font-size: 19px; color: var(--text); }
+
+  #love.on { color: var(--love); }
+  #love.on:hover { color: var(--love); }
+  #meh.on { color: var(--text); }
 
   #chip {
     flex: 0 0 auto;
@@ -180,11 +271,15 @@
     text-transform: uppercase;
     color: var(--muted);
     cursor: pointer;
+    max-width: 96px;
+    white-space: nowrap;
+    overflow: hidden;
   }
 
   #chip:hover { color: var(--text); }
 
   #dot {
+    flex: 0 0 auto;
     width: 5px; height: 5px;
     border-radius: 50%;
     background: var(--green);
@@ -192,62 +287,7 @@
 
   #chip.pinned #dot { background: var(--amber); }
 
-  /* The signature: Claude's stated reason, set as a margin note. */
-  #why {
-    margin: 7px 0 0;
-    padding-left: 8px;
-    border-left: 2px solid var(--gold);
-    color: var(--muted);
-    font-size: 11px;
-    font-style: italic;
-    line-height: 1.35;
-    max-height: 30px;
-    overflow: hidden;
-  }
-
-  #why:empty { display: none; }
-
-  /* ----------------------------------------------------------------- controls */
-
-  #controls {
-    margin-top: auto;
-    padding-top: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  #transport { display: flex; align-items: center; gap: 12px; }
-
-  #transport button {
-    background: none; border: none; padding: 0;
-    font-family: var(--icons);
-    font-size: 12px;
-    color: var(--muted);
-    cursor: pointer;
-    line-height: 1;
-    transition: color 100ms ease;
-  }
-
-  #transport button:hover { color: var(--text); }
-  #transport button:focus-visible { outline: 1px solid var(--gold); outline-offset: 3px; }
-  #playpause { font-size: 15px; color: var(--text); }
-
-  #stars { display: flex; gap: 2px; }
-
-  #stars span {
-    color: var(--dim);
-    font-size: 12px;
-    cursor: pointer;
-    line-height: 1;
-    transition: color 90ms ease;
-  }
-
-  #stars span.on { color: var(--gold); }
-  #stars:hover span { color: var(--dim); }
-  #stars span:hover, #stars span:hover ~ span { color: var(--gold); }
-  /* Hover fills left-to-right, so the row previews the rating you'd give. */
-  #stars { flex-direction: row-reverse; }
+  #moodname { overflow: hidden; text-overflow: ellipsis; }
 
   #notice {
     color: var(--dim);
@@ -258,16 +298,18 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 0 0 auto;
   }
 
   #notice:empty { display: none; }
 
   /* ------------------------------------------------------------ mood picker */
 
+  /* The chip now sits at the bottom of the panel, so the menu opens upward. */
   #moods {
     display: none;
     position: absolute;
-    right: 8px; top: 30px;
+    right: 11px; bottom: 40px;
     background: rgba(28, 28, 34, .82);
     backdrop-filter: blur(20px) saturate(160%);
     border: 1px solid rgba(255,255,255,.10);
@@ -276,7 +318,7 @@
     box-shadow: 0 8px 20px rgba(0,0,0,.55);
     z-index: 10;
     min-width: 124px;
-    max-height: 210px;
+    max-height: 150px;
     overflow-y: auto;
   }
 
@@ -313,34 +355,40 @@
 <body>
 
 <div id="shell" class="pywebview-drag-region">
-  <div id="cover" class="pywebview-drag-region">
-    <img id="art" class="pywebview-drag-region"
-         src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+
+  <div id="head" class="pywebview-drag-region">
+    <div id="cover" class="pywebview-drag-region">
+      <img id="art" class="pywebview-drag-region"
+           src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+    </div>
+    <div id="naming" class="panel pywebview-drag-region">
+      <div id="title" class="pywebview-drag-region">Nothing playing</div>
+      <div id="sub" class="pywebview-drag-region"></div>
+    </div>
   </div>
 
-  <div id="notes" class="pywebview-drag-region">
-    <div id="head" class="pywebview-drag-region">
-      <div id="naming" class="pywebview-drag-region">
-        <div id="title" class="pywebview-drag-region">Nothing playing</div>
-        <div id="artist" class="pywebview-drag-region"></div>
-      </div>
-      <div id="chip"><span id="dot"></span><span id="moodname">—</span></div>
-    </div>
+  <div id="why" class="panel pywebview-drag-region"></div>
 
-    <div id="why" class="pywebview-drag-region"></div>
-
-    <div id="controls" class="pywebview-drag-region">
-      <div id="transport">
-        <button data-act="previous" title="Previous">&#xE892;</button>
-        <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
-        <button data-act="skip" title="Next">&#xE893;</button>
-      </div>
-      <div id="stars"></div>
-    </div>
-
+  <div id="prow" class="panel pywebview-drag-region">
+    <span id="elapsed" class="clock pywebview-drag-region">0:00</span>
     <div id="progress" class="pywebview-drag-region"><i id="bar"></i></div>
-    <div id="notice" class="pywebview-drag-region"></div>
+    <span id="remain" class="clock pywebview-drag-region">-0:00</span>
   </div>
+
+  <div id="controls" class="panel pywebview-drag-region">
+    <div id="opinions">
+      <button id="love" data-stars="5">&#xEB51;</button>
+      <button id="meh" data-stars="1" title="Less of this">&#xE8E0;</button>
+    </div>
+    <div id="transport">
+      <button data-act="previous" title="Previous">&#xE892;</button>
+      <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
+      <button data-act="skip" title="Next">&#xE893;</button>
+    </div>
+    <div id="chip"><span id="dot"></span><span id="moodname">&#x2014;</span></div>
+  </div>
+
+  <div id="notice" class="panel pywebview-drag-region"></div>
 </div>
 
 <div id="moods"></div>
@@ -351,7 +399,9 @@ const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
 // ...and the seed directions your taste profile is organised by. The daemon
 // takes either, so both are worth offering.
 const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
+
 const PLAY = "", PAUSE = "";
+const HEART = "", HEART_FILLED = "";
 
 const el = (id) => document.getElementById(id);
 let state = null;
@@ -363,26 +413,41 @@ let open = false;
 
 // ---------------------------------------------------------------- rendering
 
+// position/duration arrive in milliseconds.
+function clock(ms) {
+  const total = Math.max(0, Math.floor((ms || 0) / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
 function render() {
   const np = state && state.nowPlaying;
   document.body.classList.toggle("disconnected", !(state && state.connected));
 
   if (np && np.title) {
     el("title").textContent = np.title;
-    el("artist").textContent = np.artist || "";
+    // Apple's second line is "Artist — Album"; the daemon may not know the
+    // album, in which case the artist stands alone rather than trailing a dash.
+    el("sub").textContent = [np.artist, np.album].filter(Boolean).join(" — ");
   } else {
     // An empty state should say what to do, not just report a void.
     el("title").textContent = !socketUp ? "Daemon not running"
       : (state && state.connected) ? "Nothing playing" : "No DJ tab open";
-    el("artist").textContent = !socketUp ? "Start it in your terminal"
+    el("sub").textContent = !socketUp ? "Start it in your terminal"
       : (state && state.connected) ? "" : "Open music.apple.com";
   }
 
   el("art").src = (np && np.artworkUrl) ||
     "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
-  const pct = (np && np.duration) ? Math.min(100, (np.position / np.duration) * 100) : 0;
+  const pos = (np && np.position) || 0;
+  const dur = (np && np.duration) || 0;
+  const pct = dur ? Math.min(100, (pos / dur) * 100) : 0;
   el("bar").style.width = pct + "%";
+  el("elapsed").textContent = clock(pos);
+  // Apple counts down, not up: what is left of the track, not how long it is.
+  el("remain").textContent = "-" + clock(dur ? Math.max(0, dur - pos) : 0);
 
   const playing = !!(np && np.playing);
   el("playpause").textContent = playing ? PAUSE : PLAY;
@@ -399,17 +464,17 @@ function render() {
   el("why").textContent = (state && state.why) || "";
   el("notice").textContent = (state && state.notice) || "";
 
+  // Ratings are per-mood, so say so: loving a track while focused is not a
+  // claim about the track everywhere.
   const rating = (state && state.rating) || 0;
-  el("stars").innerHTML = "";
-  // Reversed in the DOM so CSS can light up every star to the left on hover.
-  for (let i = 5; i >= 1; i--) {
-    const s = document.createElement("span");
-    s.textContent = "★";
-    s.className = i <= rating ? "on" : "";
-    s.title = i + (i === 1 ? " star" : " stars");
-    s.onclick = (e) => { e.stopPropagation(); send({action: "rate", stars: i}); };
-    el("stars").appendChild(s);
-  }
+  const when = mood.name ? " while " + mood.name : " in this mood";
+  const love = el("love");
+  love.textContent = rating === 5 ? HEART_FILLED : HEART;
+  love.classList.toggle("on", rating === 5);
+  love.title = "Love this" + when;
+  const meh = el("meh");
+  meh.classList.toggle("on", rating === 1);
+  meh.title = "Less of this" + when;
 }
 
 // ------------------------------------------------------------------ socket
@@ -477,6 +542,13 @@ el("transport").addEventListener("click", (e) => {
   } else {
     send({action: act});
   }
+});
+
+el("opinions").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  e.stopPropagation();
+  send({action: "rate", stars: Number(btn.dataset.stars)});
 });
 
 el("chip").addEventListener("click", (e) => {
