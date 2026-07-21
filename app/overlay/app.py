@@ -7,9 +7,11 @@ window on hover and remembering where you left it.
     python -m overlay.app
 """
 
+import ctypes
 import logging
 import os
 import threading
+import time
 
 import webview
 
@@ -23,6 +25,8 @@ EXPANDED = (320, 120)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "index.html")
+
+TITLE = "music-dj"
 
 log = logging.getLogger("music-dj.overlay")
 
@@ -49,6 +53,67 @@ class Api:
         win = self._window()
         if win:
             win.resize(*COLLAPSED)
+
+
+# --------------------------------------------------------------------- glass
+
+# Desktop Window Manager attributes. backdrop-filter in CSS only blurs the
+# page's own content, so a genuinely frosted window has to come from DWM.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+
+DWMWCP_ROUND = 2
+DWMSBT_TRANSIENTWINDOW = 3      # acrylic: the blur used for flyouts
+
+
+class _Margins(ctypes.Structure):
+    _fields_ = [("cxLeftWidth", ctypes.c_int), ("cxRightWidth", ctypes.c_int),
+                ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
+
+
+def apply_glass(window):
+    """Frost the window using Windows 11 acrylic.
+
+    Needs Windows 11 22H2 or newer; older builds ignore the attribute and you
+    simply get a flat dark window, which is why nothing here is fatal.
+    """
+    # The start callback fires before the native form is attached, and on the
+    # EdgeChromium backend window.native never appears at all -- so fall back
+    # to asking Windows for the window by its title.
+    hwnd = None
+    for _ in range(60):
+        try:
+            hwnd = int(window.native.Handle)
+            if hwnd:
+                break
+        except Exception:
+            pass
+        hwnd = ctypes.windll.user32.FindWindowW(None, TITLE)
+        if hwnd:
+            break
+        time.sleep(0.05)
+
+    if not hwnd:
+        log.info("could not find the window; leaving it opaque")
+        return
+
+    try:
+        dwm = ctypes.windll.dwmapi
+        for attribute, value in (
+            (DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
+            (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
+            (DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW),
+        ):
+            val = ctypes.c_int(value)
+            dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(val),
+                                      ctypes.sizeof(val))
+        # The backdrop is only drawn where the frame extends into the client
+        # area, and -1 means "the whole thing".
+        dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(_Margins(-1, -1, -1, -1)))
+        log.info("acrylic backdrop applied")
+    except Exception:
+        log.debug("could not apply glass", exc_info=True)
 
 
 def saved_position(config):
@@ -92,7 +157,16 @@ def remember_position(window):
     return store_it
 
 
-def main():
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(prog="music-dj overlay")
+    parser.add_argument("--solid", action="store_true",
+                        help="opaque window; use if the glass looks wrong")
+    args = parser.parse_args(argv)
+    return _run(args)
+
+
+def _run(args):
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s",
                         datefmt="%H:%M:%S")
@@ -106,7 +180,7 @@ def main():
 
     api = Api()
     window = webview.create_window(
-        "music-dj",
+        TITLE,
         PAGE,
         js_api=api,
         width=COLLAPSED[0], height=COLLAPSED[1],
@@ -117,13 +191,23 @@ def main():
         resizable=False,
         # The default (200, 100) floor would refuse the 40px collapsed height.
         min_size=(1, 1),
+        # Transparent so the acrylic backdrop shows through instead of the
+        # webview painting a flat colour over it.
+        transparent=not args.solid,
         background_color="#1b1b1f",
         shadow=False,
     )
     save_now = remember_position(window)
     window.events.closing += lambda *_a: save_now()
 
-    webview.start()
+    def on_start(win):
+        if args.solid:
+            win.evaluate_js("document.body.classList.add('solid')")
+            return
+        apply_glass(win)
+
+    # Runs once the native window exists; the handle does not before that.
+    webview.start(on_start, window)
 
 
 if __name__ == "__main__":

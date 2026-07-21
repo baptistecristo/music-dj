@@ -33,7 +33,9 @@
   html, body {
     margin: 0; padding: 0;
     height: 100%; overflow: hidden;
-    background: var(--bg);
+    /* Transparent so the window's acrylic backdrop shows through. The
+       .solid class is the fallback when DWM will not frost the window. */
+    background: transparent;
     color: var(--text);
     font-family: var(--display);
     font-size: 12px;
@@ -49,11 +51,29 @@
     height: 100%;
     display: flex;
     gap: 12px;
-    padding: 8px;
-    background: var(--bg);
+    padding: 9px;
+    border-radius: 10px;
+    /* Glass: tinted enough to keep text legible over a bright desktop, and
+       saturated so album colours behind it stay alive rather than going grey. */
+    background: rgba(22, 22, 27, .52);
+    backdrop-filter: blur(28px) saturate(170%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.09),
+                inset 0 1px 0 rgba(255,255,255,.13);
   }
 
-  body:not(.open) #shell { padding: 0; gap: 0; }
+  body.solid #shell {
+    background: var(--bg);
+    backdrop-filter: none;
+  }
+
+  /* Collapsed there is nothing but the cover: no glass, no padding, no edge. */
+  body:not(.open) #shell {
+    padding: 0; gap: 0;
+    background: transparent;
+    backdrop-filter: none;
+    box-shadow: none;
+    border-radius: 0;
+  }
 
   /* ------------------------------------------------------------------- cover */
 
@@ -104,10 +124,10 @@
 
   /* Real information, not decoration: how far through the track we are. */
   #progress {
-    position: absolute;
-    left: 0; right: 0; bottom: 0;
+    margin-top: 7px;
     height: 2px;
-    background: rgba(255,255,255,.14);
+    border-radius: 1px;
+    background: rgba(255,255,255,.10);
   }
 
   #progress i {
@@ -164,7 +184,7 @@
   #chip {
     flex: 0 0 auto;
     display: flex; align-items: center; gap: 5px;
-    background: var(--chip);
+    background: rgba(255,255,255,.09);
     border-radius: 3px;
     padding: 3px 7px;
     font-family: var(--utility);
@@ -261,9 +281,10 @@
     display: none;
     position: absolute;
     right: 8px; top: 30px;
-    background: var(--raised);
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
+    background: rgba(28, 28, 34, .82);
+    backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 6px;
     padding: 3px 0;
     box-shadow: 0 8px 20px rgba(0,0,0,.55);
     z-index: 10;
@@ -297,7 +318,6 @@
     <img id="art" class="pywebview-drag-region"
          src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
     <div id="minidot"></div>
-    <div id="progress"><i id="bar"></i></div>
   </div>
 
   <div id="notes" class="pywebview-drag-region">
@@ -320,6 +340,7 @@
       <div id="stars"></div>
     </div>
 
+    <div id="progress" class="pywebview-drag-region"><i id="bar"></i></div>
     <div id="notice" class="pywebview-drag-region"></div>
   </div>
 </div>
