@@ -31,7 +31,7 @@ Tidal, Amazon Music, Qobuz, Bandcamp, and Pandora**.
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/YOURUSER/music-dj.git
+git clone https://github.com/baptistecristo/music-dj.git
 cd music-dj
 .\install.ps1
 ```
@@ -39,7 +39,7 @@ cd music-dj
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/YOURUSER/music-dj.git
+git clone https://github.com/baptistecristo/music-dj.git
 cd music-dj
 ./install.sh
 ```
@@ -50,7 +50,7 @@ short service-specific guide. You can also install manually inside Claude
 Code:
 
 ```
-/plugin marketplace add YOURUSER/music-dj
+/plugin marketplace add baptistecristo/music-dj
 /plugin install music-dj@music-dj
 ```
 

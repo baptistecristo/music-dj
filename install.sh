@@ -33,11 +33,12 @@ echo "  Saved your choice to $config"
 echo ""
 if command -v claude >/dev/null 2>&1; then
     echo "  Installing the plugin into Claude Code..."
-    repo_root="$(cd "$(dirname "$0")" && pwd)"
-    claude plugin marketplace add "$repo_root" 2>/dev/null || true
+    # Install from GitHub, not the local clone, so future updates track the repo.
+    marketplace="baptistecristo/music-dj"
+    claude plugin marketplace add "$marketplace" 2>/dev/null || true
     claude plugin install music-dj@music-dj 2>/dev/null || {
         echo "  Automatic install didn't work — inside Claude Code run:"
-        echo "    /plugin marketplace add $repo_root"
+        echo "    /plugin marketplace add $marketplace"
         echo "    /plugin install music-dj@music-dj"
     }
 else

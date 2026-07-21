@@ -10,7 +10,11 @@ ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 tmp = tempfile.mkdtemp()
-os.environ["HOME"] = tmp  # isolate config
+# Isolate config. HOME covers POSIX; on Windows os.path.expanduser("~") reads
+# USERPROFILE and ignores HOME, so set both or subprocesses (the MCP server)
+# will write to the developer's REAL ~/.music-dj.
+os.environ["HOME"] = tmp
+os.environ["USERPROFILE"] = tmp
 
 import musicdj  # noqa: E402
 

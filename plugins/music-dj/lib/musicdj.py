@@ -48,12 +48,20 @@ DEFAULT_CONFIG = {
 # ---------------------------------------------------------------- config/state
 
 def load_config():
+    # utf-8-sig so a BOM-prefixed config (PowerShell writes one on Windows)
+    # still parses; it's a no-op when there's no BOM.
     try:
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8-sig") as f:
             cfg = json.load(f)
-    except Exception:
+    except FileNotFoundError:
         cfg = {}
         save_config(DEFAULT_CONFIG)
+    except Exception as e:
+        # Unreadable but present: fall back to defaults in memory, but never
+        # overwrite the file — that would erase the user's settings.
+        print("music-dj: could not read %s (%s); using defaults" % (CONFIG_PATH, e),
+              file=sys.stderr)
+        cfg = {}
     merged = dict(DEFAULT_CONFIG)
     merged.update(cfg or {})
     playlists = dict(DEFAULT_CONFIG["playlists"])
@@ -65,7 +73,7 @@ def load_config():
 def save_config(cfg):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception:
         pass
@@ -73,7 +81,7 @@ def save_config(cfg):
 
 def load_state():
     try:
-        with open(STATE_PATH) as f:
+        with open(STATE_PATH, encoding="utf-8-sig") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -82,7 +90,7 @@ def load_state():
 def save_state(st):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(STATE_PATH, "w") as f:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(st, f)
     except Exception:
         pass

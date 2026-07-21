@@ -49,7 +49,11 @@ if (Test-Path $configPath) {
     $cfg = [pscustomobject]@{ enabled = $true }
 }
 $cfg | Add-Member -NotePropertyName service -NotePropertyValue $service.id -Force
-$cfg | ConvertTo-Json -Depth 5 | Set-Content $configPath -Encoding UTF8
+# WriteAllText with UTF8Encoding($false) = UTF-8 with NO BOM. Set-Content
+# -Encoding UTF8 emits a BOM on Windows PowerShell 5.1, which breaks the
+# plugin's Python-side json.load.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($configPath, ($cfg | ConvertTo-Json -Depth 5), $utf8NoBom)
 Write-Host ("  Saved your choice to {0}" -f $configPath) -ForegroundColor Gray
 
 # ----------------------------------------------------------- prerequisites
@@ -67,27 +71,29 @@ Write-Host "    [--] Chrome + the 'Claude in Chrome' extension are needed for pl
 Write-Host "         Get it from the Chrome Web Store, sign in with your Claude account."
 
 # ----------------------------------------------------------- install plugin
-$repoRoot = $PSScriptRoot
+$marketplace = "baptistecristo/music-dj"
 if ($claudeOk) {
     Write-Host ""
     Write-Host "  Installing the plugin into Claude Code..." -ForegroundColor Cyan
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    claude plugin marketplace add $repoRoot *> $null
+    # Install from GitHub, not $repoRoot, so future updates track the repo.
+    claude plugin marketplace add $marketplace *> $null
+    $marketplaceOk = ($LASTEXITCODE -eq 0)
     claude plugin install music-dj@music-dj *> $null
-    $installOk = ($LASTEXITCODE -eq 0)
+    $installOk = $marketplaceOk -and ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     if ($installOk) {
         Write-Host "    [ok] Plugin installed." -ForegroundColor Green
     } else {
         Write-Host "    [!!] Automatic install didn't work - do it inside Claude Code instead:" -ForegroundColor Yellow
-        Write-Host ("         /plugin marketplace add {0}" -f $repoRoot)
+        Write-Host ("         /plugin marketplace add {0}" -f $marketplace)
         Write-Host "         /plugin install music-dj@music-dj"
     }
 } else {
     Write-Host ""
     Write-Host "  After installing Claude Code, run inside it:" -ForegroundColor Yellow
-    Write-Host ("    /plugin marketplace add {0}" -f $repoRoot)
+    Write-Host ("    /plugin marketplace add {0}" -f $marketplace)
     Write-Host "    /plugin install music-dj@music-dj"
 }
 
