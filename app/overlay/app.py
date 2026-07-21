@@ -48,11 +48,13 @@ class Api:
         win = self._window()
         if win:
             win.resize(*EXPANDED)
+        set_alpha(ACTIVE_ALPHA)
 
     def collapse(self):
         win = self._window()
         if win:
             win.resize(*COLLAPSED)
+        set_alpha(IDLE_ALPHA)
 
 
 # --------------------------------------------------------------------- glass
@@ -69,7 +71,12 @@ DWMSBT_TRANSIENTWINDOW = 3      # acrylic: the blur used for flyouts
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 LWA_ALPHA = 0x00000002
-DEFAULT_ALPHA = 235             # out of 255; low enough to read through
+# Idle it sits back and lets the desktop through; under the pointer it firms
+# up so the text is readable while you are actually looking at it.
+ACTIVE_ALPHA = 235
+IDLE_ALPHA = 140
+
+_hwnd = None                    # found once, reused for every alpha change
 
 
 class _Margins(ctypes.Structure):
@@ -77,7 +84,7 @@ class _Margins(ctypes.Structure):
                 ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
 
 
-def apply_glass(window, alpha=DEFAULT_ALPHA):
+def apply_glass(window):
     """Frost the window using Windows 11 acrylic.
 
     Needs Windows 11 22H2 or newer; older builds ignore the attribute and you
@@ -86,6 +93,7 @@ def apply_glass(window, alpha=DEFAULT_ALPHA):
     # The start callback fires before the native form is attached, and on the
     # EdgeChromium backend window.native never appears at all -- so fall back
     # to asking Windows for the window by its title.
+    global _hwnd
     hwnd = None
     for _ in range(60):
         try:
@@ -128,10 +136,24 @@ def apply_glass(window, alpha=DEFAULT_ALPHA):
         user32 = ctypes.windll.user32
         style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
-        user32.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)
-        log.info("window translucency set (alpha %d/255)", alpha)
+        _hwnd = hwnd
+        set_alpha(IDLE_ALPHA)      # starts collapsed, so start faded
+        log.info("translucency on: %d idle, %d under the pointer",
+                 IDLE_ALPHA, ACTIVE_ALPHA)
     except Exception:
         log.info("could not set translucency; the window stays opaque")
+
+
+def set_alpha(value):
+    """Change how much of the desktop shows through. Cheap enough to call on
+    every hover."""
+    if not _hwnd:
+        return
+    try:
+        ctypes.windll.user32.SetLayeredWindowAttributes(
+            _hwnd, 0, max(40, min(255, int(value))), LWA_ALPHA)
+    except Exception:
+        log.debug("could not change alpha", exc_info=True)
 
 
 def saved_position(config):
@@ -180,9 +202,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="music-dj overlay")
     parser.add_argument("--solid", action="store_true",
                         help="opaque window; use if the glass looks wrong")
-    parser.add_argument("--alpha", type=int, default=DEFAULT_ALPHA,
+    parser.add_argument("--alpha", type=int, default=ACTIVE_ALPHA,
                         metavar="0-255",
-                        help="window translucency (default %d)" % DEFAULT_ALPHA)
+                        help="opacity under the pointer (default %d)" % ACTIVE_ALPHA)
+    parser.add_argument("--idle-alpha", type=int, default=IDLE_ALPHA,
+                        metavar="0-255",
+                        help="opacity when idle (default %d)" % IDLE_ALPHA)
     args = parser.parse_args(argv)
     return _run(args)
 
@@ -198,6 +223,10 @@ def _run(args):
     # a star would also shove the window. Instead: drag only when the click
     # lands directly on an element tagged .pywebview-drag-region.
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
+
+    global ACTIVE_ALPHA, IDLE_ALPHA
+    ACTIVE_ALPHA = max(40, min(255, args.alpha))
+    IDLE_ALPHA = max(40, min(255, args.idle_alpha))
 
     api = Api()
     window = webview.create_window(
@@ -225,7 +254,7 @@ def _run(args):
         if args.solid:
             win.evaluate_js("document.body.classList.add('solid')")
             return
-        apply_glass(win, max(60, min(255, args.alpha)))
+        apply_glass(win)
 
     # Runs once the native window exists; the handle does not before that.
     webview.start(on_start, window)
