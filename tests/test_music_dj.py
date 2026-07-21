@@ -61,11 +61,39 @@ check("read docs -> research", c("Read", {"file_path": "notes/design.md"}, None)
 check("grep -> None", c("Grep", {"pattern": "foo"}, None) is None)
 check("agent tool -> research", c("Agent", {}, None) == "research")
 
+check("bash bun test pass -> building",
+      c("Bash", {"command": "bun test"}, {"stdout": "all pass"}) == "building")
+check("bash ruff clean -> building",
+      c("Bash", {"command": "ruff check ."}, {"stdout": "All checks passed!"}) == "building")
+check("bash mypy fail -> debugging",
+      c("Bash", {"command": "mypy src/"}, {"stdout": "app.py:3: error: bad type"}) == "debugging")
+
+# weighted signals: glancing at docs is weak evidence, edits/failures are strong
+s = getattr(musicdj, "classify_tool_signal", None)
+check("classify_tool_signal exists", callable(s))
+if callable(s):
+    check("read docs is weak research signal",
+          s("Read", {"file_path": "notes/design.md"}, None) is not None
+          and s("Read", {"file_path": "notes/design.md"}, None)[0] == "research"
+          and s("Read", {"file_path": "notes/design.md"}, None)[1] < 1.0)
+    check("read code carries no signal", s("Read", {"file_path": "x.py"}, None) is None)
+    check("websearch is strong research signal",
+          s("WebSearch", {}, None) == ("research", 1.0))
+    check("edit is strong coding signal",
+          s("Edit", {"file_path": "a.py"}, None) == ("coding", 1.0))
+    check("bash failure is extra-strong debugging signal",
+          s("Bash", {"command": "pytest"}, {"stdout": "1 FAILED"})[1] > 1.0)
+
 p = musicdj.classify_prompt
 check("prompt bug -> debugging", p("there's a bug in the login flow") == "debugging")
 check("prompt blog -> writing", p("draft a blog post about rust") == "writing")
 check("prompt research -> research", p("research the best sqlite orm") == "research")
 check("prompt neutral -> None", p("hello") is None)
+check("prompt french research -> research", p("renseigne-toi sur les ORM sqlite") == "research")
+check("prompt scored, not first-match: fix the docs -> writing",
+      p("fix the docs page for the api") == "writing")
+check("prompt scored: real failure words still win",
+      p("fix the crash in the docs build") == "debugging")
 check("prompt fr plante -> debugging", p("l'app plante au démarrage") == "debugging")
 check("prompt fr marche pas -> debugging", p("le login ne marche pas") == "debugging")
 check("prompt fr corrige -> debugging", p("corrige l'erreur d'import") == "debugging")
@@ -120,6 +148,26 @@ check("urgent mood allowed at 200s", sw and played[-1] == "Calm", msg)
 
 sw, msg = musicdj.maybe_switch("nonsense")
 check("unknown mood rejected", not sw)
+
+# --- weighted accumulation: mixed workflows converge instead of resetting ---
+st = musicdj.load_state()
+st.update({"current_mood": "research", "last_switch": 0, "mood_scores": {}})
+musicdj.save_state(st)
+sw, msg = musicdj.decide_switch("coding", weight=1.0)
+check("weighted: 1st coding signal pending", not sw and "pending" in msg, msg)
+sw, msg = musicdj.decide_switch("research")  # e.g. a Read mid-coding
+check("weighted: same-mood signal is a no-op", not sw, msg)
+sw, msg = musicdj.decide_switch("coding", weight=1.0)
+check("weighted: interleaved signals don't reset progress", sw, msg)
+
+st = musicdj.load_state()
+st.update({"current_mood": "coding", "last_switch": 0, "mood_scores": {}})
+musicdj.save_state(st)
+for i in range(5):
+    sw, msg = musicdj.decide_switch("research", weight=0.35)
+    check("weighted: weak signal %d/5 stays pending" % (i + 1), not sw, msg)
+sw, msg = musicdj.decide_switch("research", weight=0.35)
+check("weighted: enough weak signals eventually switch", sw, msg)
 
 # disabled
 cfg["enabled"] = False

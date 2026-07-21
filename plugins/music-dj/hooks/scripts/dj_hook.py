@@ -41,7 +41,7 @@ def emit_context(event, mood):
     }))
 
 
-def handle_mood(event, mood, force=False):
+def handle_mood(event, mood, weight=1.0, force=False):
     """Switch natively when we can, otherwise tell Claude to do it.
 
     decide_switch() is called exactly once: it owns the debounce and writes
@@ -49,7 +49,7 @@ def handle_mood(event, mood, force=False):
     then report "already in mood X" on the second pass.
     """
     import musicdj
-    should, _msg = musicdj.decide_switch(mood, force=force)
+    should, _msg = musicdj.decide_switch(mood, force=force, weight=weight)
     if not should:
         return
 
@@ -91,16 +91,16 @@ def main():
 
     try:
         if event == "posttool":
-            mood = musicdj.classify_tool(
+            sig = musicdj.classify_tool_signal(
                 data.get("tool_name", ""),
                 data.get("tool_input") or {},
                 data.get("tool_response"))
-            if mood:
-                handle_mood(event, mood)
+            if sig:
+                handle_mood(event, sig[0], weight=sig[1])
         elif event == "prompt":
             mood = musicdj.classify_prompt(data.get("prompt", ""))
             if mood:
-                handle_mood(event, mood)
+                handle_mood(event, mood, weight=musicdj.PROMPT_WEIGHT)
         elif event == "sessionstart":
             cfg = musicdj.load_config()
             mood = cfg.get("session_start_mood") or ""

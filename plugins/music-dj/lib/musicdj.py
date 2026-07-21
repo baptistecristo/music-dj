@@ -33,9 +33,14 @@ DEFAULT_CONFIG = {
     "shuffle": True,
     # Don't switch playlists more often than this (seconds).
     "min_seconds_between_switches": 300,
-    # A new mood must be observed this many times in a row before switching
-    # (prevents flapping when activity bounces around).
+    # A new mood must accumulate this much signal weight before switching.
+    # Strong signals (edits, searches, test runs) count 1.0, weak ones
+    # (glancing at a doc) less, failures a bit more — so two solid
+    # observations switch, but a stray glance never does.
     "confirmations_needed": 2,
+    # Mood evidence fades with this half-life (seconds), so a burst of
+    # research an hour ago doesn't outvote what's happening now.
+    "score_half_life_seconds": 300,
     # Moods that mean "things just went wrong": they switch on a single
     # observation and with half the debounce window, so the calm-down music
     # lands while it still matters.
@@ -202,6 +207,9 @@ _BUILD_RE = re.compile(
     r"vite build|webpack|next build|dotnet build|swift build|ninja|bazel|"
     r"cmake --build|mix compile|git push|git commit|deploy)\b"
     r"|(^|\s|&&\s*)make(\s|$)")
+_LINT_RE = re.compile(
+    r"\b(ruff|eslint|flake8|pylint|mypy|pyright|cargo clippy|golangci-lint|"
+    r"rubocop|shellcheck|prettier --check|black --check|biome (check|lint))\b")
 _FAIL_RE = re.compile(
     r"Traceback \(most recent call last\)|FAILED|npm ERR!|npm error|"
     r"error\[E|error:|Error:|error TS\d|AssertionError|assertion failed|"
@@ -218,10 +226,14 @@ _RESEARCH_TOOLS = {"WebSearch", "WebFetch", "Task", "Explore", "Agent"}
 # Prompt classification is bilingual (English + French) and errs on the side
 # of returning None: a wrong mood switch is worse than no switch.
 _PROMPT_DEBUG_RE = re.compile(
-    r"\b(bug|bogue|debug|broken|fix(e[sd])?|error|erreur|crash|plante|"
+    r"\b(bug|bogue|debug|broken|error|erreur|crash|plante|"
     r"failing|regression|régression|doesn'?t work|not working|"
     r"stopped working|marche (pas|plus)|fonctionne (pas|plus)|"
-    r"corrige[rz]?|répare[rz]?|échoue|stack ?trace|traceback)\b", re.I)
+    r"échoue|stack ?trace|traceback)\b", re.I)
+# "fix"-type verbs alone are weak evidence: "fix the docs" is a writing task.
+# They only tip the scale next to a real failure word or with no competition.
+_PROMPT_DEBUG_HINT_RE = re.compile(
+    r"\b(fix(e[sd])?|corrige[rz]?|répare[rz]?)\b", re.I)
 _PROMPT_WRITE_RE = re.compile(
     r"\b(draft|blog|docs?|documentation|readme|essay|email|e-mail|article|"
     r"report|newsletter|changelog|release notes|rédige[rz]?|courriel|"
@@ -243,8 +255,16 @@ def _ext_of(tool_input):
     return os.path.splitext(path)[1].lower()
 
 
-def classify_tool(tool_name, tool_input, tool_response):
-    """Map a tool call to a mood, or None if it carries no signal."""
+# Signal weights: how much one observation counts toward a mood switch
+# (confirmations_needed is the target). Failures shout, doc-glances whisper.
+WEIGHT_STRONG = 1.0
+WEIGHT_FAILURE = 1.25
+WEIGHT_GLANCE = 0.5
+PROMPT_WEIGHT = 1.5   # the user saying it beats us inferring it
+
+
+def classify_tool_signal(tool_name, tool_input, tool_response):
+    """Map a tool call to (mood, weight), or None if it carries no signal."""
     resp_text = ""
     if tool_response is not None:
         try:
@@ -254,55 +274,97 @@ def classify_tool(tool_name, tool_input, tool_response):
 
     if tool_name == "Bash":
         cmd = (tool_input or {}).get("command", "") or ""
-        if _TEST_RE.search(cmd):
-            return "debugging" if _FAIL_RE.search(resp_text) else "building"
-        if _BUILD_RE.search(cmd):
-            return "debugging" if _FAIL_RE.search(resp_text) else "building"
-        if _FAIL_RE.search(resp_text):
-            return "debugging"
+        failed = bool(_FAIL_RE.search(resp_text))
+        if _TEST_RE.search(cmd) or _BUILD_RE.search(cmd) or _LINT_RE.search(cmd):
+            return ("debugging", WEIGHT_FAILURE) if failed \
+                else ("building", WEIGHT_STRONG)
+        if failed:
+            return ("debugging", WEIGHT_FAILURE)
         return None
 
     if tool_name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         ext = _ext_of(tool_input)
         if ext in _DOC_EXTS:
-            return "writing"
-        if ext in _CODE_EXTS or ext == "":
-            return "coding"
-        return "coding"
+            return ("writing", WEIGHT_STRONG)
+        return ("coding", WEIGHT_STRONG)
 
     if tool_name == "Read":
-        # Reading docs is research; reading code is just part of whatever
-        # the user is already doing — no signal (it used to count as
-        # research, which dragged every coding session toward ambient).
-        return "research" if _ext_of(tool_input) in _DOC_EXTS else None
+        # Glancing at docs is weak research evidence; reading code is just
+        # part of whatever the user is already doing — no signal (it used to
+        # count as research, which dragged every coding session toward
+        # ambient).
+        if _ext_of(tool_input) in _DOC_EXTS:
+            return ("research", WEIGHT_GLANCE)
+        return None
 
     if tool_name in _RESEARCH_TOOLS:
-        return "research"
+        return ("research", WEIGHT_STRONG)
 
     return None
 
 
+def classify_tool(tool_name, tool_input, tool_response):
+    """Map a tool call to a mood, or None if it carries no signal."""
+    sig = classify_tool_signal(tool_name, tool_input, tool_response)
+    return sig[0] if sig else None
+
+
+_PROMPT_SCORED_RES = [
+    ("debugging", _PROMPT_DEBUG_RE, 2),
+    ("debugging", _PROMPT_DEBUG_HINT_RE, 1),
+    ("building", _PROMPT_SHIP_RE, 2),
+    ("writing", _PROMPT_WRITE_RE, 2),
+    ("research", _PROMPT_RESEARCH_RE, 2),
+    ("coding", _PROMPT_CODE_RE, 2),
+]
+
+# Tie-break order when scores are level (urgency first).
+_PROMPT_TIE_ORDER = ("debugging", "building", "writing", "research", "coding")
+
+
 def classify_prompt(text):
-    """Map a user prompt to a mood, or None. Understands English and French."""
+    """Map a user prompt to a mood, or None. Understands English and French.
+
+    All mood keyword sets are scored and the best one wins, instead of
+    first-match-wins — so "fix the docs page" reads as writing (docs beats
+    the lone fix-verb), while "fix the crash" still reads as debugging.
+    """
     text = text or ""
-    if _PROMPT_DEBUG_RE.search(text):
-        return "debugging"
-    if _PROMPT_SHIP_RE.search(text):
-        return "building"
-    if _PROMPT_WRITE_RE.search(text):
-        return "writing"
-    if _PROMPT_RESEARCH_RE.search(text):
-        return "research"
-    if _PROMPT_CODE_RE.search(text):
-        return "coding"
+    scores = {}
+    for mood, rx, weight in _PROMPT_SCORED_RES:
+        n = len(rx.findall(text))
+        if n:
+            scores[mood] = scores.get(mood, 0) + n * weight
+    if not scores:
+        return None
+    best = max(scores.values())
+    for mood in _PROMPT_TIE_ORDER:
+        if scores.get(mood) == best:
+            return mood
     return None
 
 
 # ------------------------------------------------------------------ switching
 
-def decide_switch(mood, force=False):
+def _decayed_scores(st, now, half_life):
+    """Per-mood evidence scores, decayed for the time since the last signal."""
+    scores = {m: float(v) for m, v in (st.get("mood_scores") or {}).items()}
+    elapsed = max(0.0, now - float(st.get("last_signal") or now))
+    if scores and elapsed > 0 and half_life > 0:
+        factor = 0.5 ** (elapsed / half_life)
+        scores = {m: v * factor for m, v in scores.items() if v * factor >= 0.05}
+    return scores
+
+
+def decide_switch(mood, force=False, weight=1.0):
     """Debounced, sticky mood-switch decision (no playback). When it returns
-    True the state is updated to the new mood. Returns (should_switch, msg)."""
+    True the state is updated to the new mood. Returns (should_switch, msg).
+
+    Evidence accumulates as decaying per-mood scores rather than a
+    consecutive-observation counter, so a mixed workflow (edit, glance at a
+    doc, edit again) still converges on its dominant mood instead of each
+    signal resetting the last one's progress.
+    """
     if mood not in MOODS:
         return False, "unknown mood: %s" % mood
     cfg = load_config()
@@ -318,37 +380,39 @@ def decide_switch(mood, force=False):
     urgent = mood in cfg.get("urgent_moods", DEFAULT_CONFIG["urgent_moods"])
 
     if not force:
+        half_life = float(cfg.get("score_half_life_seconds", 300))
+        scores = _decayed_scores(st, now, half_life)
         if st.get("current_mood") == mood:
-            if st.get("pending_mood"):
-                st["pending_mood"] = None
-                st["pending_count"] = 0
-                save_state(st)
+            # Reinforce the current mood so competitors must genuinely
+            # dominate it, not just outlast a stale counter.
+            scores[mood] = scores.get(mood, 0.0) + weight
+            st.update({"mood_scores": scores, "last_signal": now})
+            save_state(st)
             return False, "already in mood %s" % mood
         min_wait = float(cfg.get("min_seconds_between_switches", 300))
         if urgent:
             min_wait /= 2
         if now - st.get("last_switch", 0) < min_wait:
             return False, "switched too recently"
-        need = 1 if urgent else int(cfg.get("confirmations_needed", 2))
-        if need > 1:
-            if st.get("pending_mood") == mood:
-                st["pending_count"] = int(st.get("pending_count", 0)) + 1
-            else:
-                st["pending_mood"] = mood
-                st["pending_count"] = 1
-            if st["pending_count"] < need:
-                save_state(st)
-                return False, "mood %s pending (%d/%d)" % (mood, st["pending_count"], need)
+        scores[mood] = scores.get(mood, 0.0) + weight
+        st.update({"mood_scores": scores, "last_signal": now})
+        need = 1.0 if urgent else float(cfg.get("confirmations_needed", 2))
+        rival = max((v for m, v in scores.items() if m != mood), default=0.0)
+        # 0.1 tolerance: confirmations arriving within ~a minute of each
+        # other decay a hair below the exact threshold; near enough counts.
+        if scores[mood] < need - 0.1 or (not urgent and scores[mood] <= rival):
+            save_state(st)
+            return False, "mood %s pending (%.1f/%.1f)" % (mood, scores[mood], need)
 
-    st.update({"current_mood": mood, "last_switch": now,
-               "pending_mood": None, "pending_count": 0})
+    st.update({"current_mood": mood, "last_switch": now, "mood_scores": {},
+               "last_signal": now, "pending_mood": None, "pending_count": 0})
     save_state(st)
     return True, "switch to mood %s" % mood
 
 
-def maybe_switch(mood, force=False):
+def maybe_switch(mood, force=False, weight=1.0):
     """Decide + act natively (macOS). Returns (switched, message)."""
-    should, msg = decide_switch(mood, force=force)
+    should, msg = decide_switch(mood, force=force, weight=weight)
     if not should:
         return False, msg
     cfg = load_config()
