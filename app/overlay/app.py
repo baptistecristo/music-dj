@@ -104,6 +104,57 @@ class _Margins(ctypes.Structure):
                 ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
 
 
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+
+def _guid(d1, d2, d3, rest):
+    return _GUID(d1, d2, d3, (ctypes.c_ubyte * 8)(*rest))
+
+
+CLSID_TASKBARLIST = _guid(0x56FDF344, 0xFD6D, 0x11D0,
+                          (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
+IID_ITASKBARLIST = _guid(0x56FDF342, 0xFD6D, 0x11D0,
+                         (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
+CLSCTX_INPROC_SERVER = 1
+# ITaskbarList vtable: QueryInterface, AddRef, Release, HrInit, AddTab,
+# DeleteTab, ActivateTab, SetActiveAlt.
+VT_HRINIT, VT_DELETETAB = 3, 5
+
+
+def hide_from_taskbar(hwnd):
+    """Drop the taskbar button without restyling the window.
+
+    The obvious route -- adding WS_EX_TOOLWINDOW -- needs the window hidden and
+    shown again for Windows to re-read it, and doing that to a window pywebview
+    owns loses it for good. The shell exposes this instead, and it works on a
+    window that is already up.
+    """
+    ole32 = ctypes.windll.ole32
+    ole32.CoInitialize(None)
+    ptr = ctypes.c_void_p()
+    hr = ole32.CoCreateInstance(ctypes.byref(CLSID_TASKBARLIST), None,
+                                CLSCTX_INPROC_SERVER,
+                                ctypes.byref(IID_ITASKBARLIST),
+                                ctypes.byref(ptr))
+    if hr != 0 or not ptr:
+        log.info("taskbar list unavailable (0x%08x); the button stays", hr & 0xFFFFFFFF)
+        return False
+
+    vtable = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    proto = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.c_void_p)
+    init = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p)(vtable[VT_HRINIT])
+    delete = proto(vtable[VT_DELETETAB])
+
+    if init(ptr) != 0:
+        log.info("could not initialise the taskbar list; the button stays")
+        return False
+    ok = delete(ptr, hwnd) == 0
+    log.info("taskbar button removed" if ok else "taskbar button could not be removed")
+    return ok
+
+
 def find_visible_window(title):
     """The shown top-level window with this title, or None.
 
@@ -187,6 +238,7 @@ def apply_glass(window):
         _hwnd = hwnd
         set_alpha(IDLE_ALPHA)      # starts collapsed, so start faded
         set_size(*COLLAPSED)
+        hide_from_taskbar(hwnd)
         rect = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         log.info("translucency on: %d idle, %d under the pointer; "
