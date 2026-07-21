@@ -4,6 +4,11 @@
 (() => {
   "use strict";
 
+  // Guard against being injected twice (manifest + on demand); a second relay
+  // would forward every message to the daemon in duplicate.
+  if (window.__musicDjBridgeIso) return;
+  window.__musicDjBridgeIso = true;
+
   const FROM_PAGE = "music-dj:from-page";
   const TO_PAGE = "music-dj:to-page";
 

@@ -3,7 +3,7 @@
   "name": "music-dj-bridge",
   "version": "0.1.0",
   "description": "Bridges the local music-dj daemon to the Apple Music web player.",
-  "permissions": ["alarms", "storage", "tabs"],
+  "permissions": ["alarms", "storage", "tabs", "scripting"],
   "host_permissions": [
     "https://music.apple.com/*",
     "https://amp-api.music.apple.com/*"

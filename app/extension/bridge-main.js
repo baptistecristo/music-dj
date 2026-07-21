@@ -10,6 +10,12 @@
 (() => {
   "use strict";
 
+  // The manifest injects this on page load, and the service worker injects it
+  // on demand for tabs that predate the extension. Both can land in the same
+  // tab, and wiring the MusicKit listeners twice would double every event.
+  if (window.__musicDjBridgeMain) return;
+  window.__musicDjBridgeMain = true;
+
   const OUT = "music-dj:from-page";
   const IN = "music-dj:to-page";
   const API = "https://amp-api.music.apple.com";

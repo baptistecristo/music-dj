@@ -23,20 +23,42 @@ async function findTab() {
   return tabId;
 }
 
+// Content scripts declared in the manifest only reach pages that load after the
+// extension is installed. A tab that was already open when you loaded it has no
+// bridge in it, and every command fails with "Receiving end does not exist".
+// Injecting on demand fixes that without asking the user to reload anything.
+async function inject(id) {
+  await chrome.scripting.executeScript({
+    target: { tabId: id }, files: ["bridge-main.js"], world: "MAIN" });
+  await chrome.scripting.executeScript({
+    target: { tabId: id }, files: ["bridge-iso.js"], world: "ISOLATED" });
+}
+
 async function toPage(payload) {
   if (tabId == null) await findTab();
   if (tabId == null) throw new Error("no music.apple.com tab open");
   try {
     await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
+    return;
   } catch (e) {
-    // Stale tab id (closed, or navigated away) — look again once before failing
-    // so a reload doesn't need a daemon restart to recover.
-    tabId = null;
-    if (await findTab()) {
-      await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
-    } else {
-      throw new Error("no music.apple.com tab open");
-    }
+    log("no listener in tab", tabId, "- re-injecting");
+  }
+
+  // Either the tab id went stale (closed, navigated away) or the bridge was
+  // never injected. Find the tab again, inject, and retry once.
+  tabId = null;
+  if (!(await findTab())) throw new Error("no music.apple.com tab open");
+  try {
+    await inject(tabId);
+  } catch (e) {
+    throw new Error("could not inject into the tab: " + (e.message || e));
+  }
+  // The page-world script polls for MusicKit, so give it a moment to wire up.
+  await new Promise((r) => setTimeout(r, 500));
+  try {
+    await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
+  } catch (e) {
+    throw new Error("the DJ tab is not responding — try reloading it");
   }
 }
 
