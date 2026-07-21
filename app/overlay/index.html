@@ -17,7 +17,6 @@
     --muted: #9a9aa6;
     --dim: #62626e;
     --gold: #f5c451;
-    --love: #fa586a;
     --chip: #2c2c34;
     --hairline: #32323c;
     --green: #57c77f;
@@ -221,7 +220,7 @@
 
   /* ----------------------------------------------------------------- controls
 
-     Three tracks: opinions left, transport dead centre, mood right. The centre
+     Three tracks: stars left, transport dead centre, mood right. The centre
      column is absolutely centred against the row rather than the leftover
      space, so the play button does not drift when the mood name changes. */
 
@@ -235,7 +234,6 @@
     flex: 0 0 auto;
   }
 
-  #opinions { display: flex; align-items: center; gap: 8px; }
 
   #transport {
     position: absolute;
@@ -262,9 +260,21 @@
 
   #playpause { font-size: 19px; color: var(--text); }
 
-  #love.on { color: var(--love); }
-  #love.on:hover { color: var(--love); }
-  #meh.on { color: var(--text); }
+  /* Five stars, filled left to right. Hovering previews the rating you would
+     give, so you can see it before you commit to it. */
+  #stars { display: flex; flex-direction: row-reverse; gap: 3px; }
+
+  #stars span {
+    color: var(--dim);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 90ms ease;
+  }
+
+  #stars span.on { color: var(--gold); }
+  #stars:hover span { color: var(--dim); }
+  #stars span:hover, #stars span:hover ~ span { color: var(--gold); }
 
   #chip {
     flex: 0 0 auto;
@@ -383,10 +393,7 @@
   </div>
 
   <div id="controls" class="panel pywebview-drag-region">
-    <div id="opinions">
-      <button id="love" data-stars="5">&#xEB51;</button>
-      <button id="meh" data-stars="1" title="Less of this">&#xE8E0;</button>
-    </div>
+    <div id="stars"></div>
     <div id="transport">
       <button data-act="previous" title="Previous">&#xE892;</button>
       <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
@@ -408,7 +415,6 @@ const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
 const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
 
 const PLAY = "\uE768", PAUSE = "\uE769";
-const HEART = "\uEB51", HEART_FILLED = "\uEB52";
 
 const el = (id) => document.getElementById(id);
 let state = null;
@@ -471,17 +477,26 @@ function render() {
   el("why").textContent = (state && state.why) || "";
   el("notice").textContent = (state && state.notice) || "";
 
-  // Ratings are per-mood, so say so: loving a track while focused is not a
-  // claim about the track everywhere.
+  // Ratings are per-mood, so the tooltip says which mood: one star while
+  // debugging is not a verdict on the track everywhere.
   const rating = (state && state.rating) || 0;
   const when = mood.name ? " while " + mood.name : " in this mood";
-  const love = el("love");
-  love.textContent = rating === 5 ? HEART_FILLED : HEART;
-  love.classList.toggle("on", rating === 5);
-  love.title = "Love this" + when;
-  const meh = el("meh");
-  meh.classList.toggle("on", rating === 1);
-  meh.title = "Less of this" + when;
+  const stars = el("stars");
+  stars.innerHTML = "";
+  // Built in reverse so the CSS sibling selector can light every star to the
+  // left of the one under the pointer.
+  for (let i = 5; i >= 1; i--) {
+    const star = document.createElement("span");
+    star.textContent = "★";
+    star.className = i <= rating ? "on" : "";
+    star.title = i + (i === 1 ? " star" : " stars") + when;
+    star.onclick = (ev) => {
+      ev.stopPropagation();
+      // Clicking the rating you already have clears it.
+      send({action: "rate", stars: i === rating ? 0 : i});
+    };
+    stars.appendChild(star);
+  }
 }
 
 // ------------------------------------------------------------------ socket
@@ -549,13 +564,6 @@ el("transport").addEventListener("click", (e) => {
   } else {
     send({action: act});
   }
-});
-
-el("opinions").addEventListener("click", (e) => {
-  const btn = e.target.closest("button");
-  if (!btn) return;
-  e.stopPropagation();
-  send({action: "rate", stars: Number(btn.dataset.stars)});
 });
 
 el("chip").addEventListener("click", (e) => {

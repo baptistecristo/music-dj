@@ -73,7 +73,15 @@ DWMSBT_TRANSIENTWINDOW = 3      # acrylic: the blur used for flyouts
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
+# A tool window is furniture, not a document: Windows leaves it out of the
+# taskbar and out of the Alt+Tab list, which is what you want from something
+# that just sits on top all day.
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
 LWA_ALPHA = 0x00000002
+
+SW_HIDE = 0
+SW_SHOWNA = 8                   # show again without stealing focus
 # Idle it sits back and lets the desktop through; under the pointer it firms
 # up so the text is readable while you are actually looking at it.
 ACTIVE_ALPHA = 235
@@ -138,13 +146,22 @@ def apply_glass(window):
     try:
         user32 = ctypes.windll.user32
         style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+        style = (style | WS_EX_LAYERED | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+
+        # Windows only re-reads the taskbar-affecting styles when a window is
+        # shown, so it has to be hidden across the change. SW_SHOWNA brings it
+        # back without pulling focus off whatever you were typing in.
+        user32.ShowWindow(hwnd, SW_HIDE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        user32.ShowWindow(hwnd, SW_SHOWNA)
+
         _hwnd = hwnd
         set_alpha(IDLE_ALPHA)      # starts collapsed, so start faded
-        log.info("translucency on: %d idle, %d under the pointer",
+        log.info("translucency on: %d idle, %d under the pointer; "
+                 "hidden from the taskbar and Alt+Tab",
                  IDLE_ALPHA, ACTIVE_ALPHA)
     except Exception:
-        log.info("could not set translucency; the window stays opaque")
+        log.info("could not restyle the window; it stays opaque and in the taskbar")
 
 
 def set_alpha(value):
