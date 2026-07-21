@@ -20,8 +20,8 @@ tests/       98 tests, browser mocked
 | Milestone | State |
 |---|---|
 | 1. Extension + CLI driver | **verified against the live player** |
-| 2. Daemon, profile picking | passes 103 tests against a mock extension; **not yet run live** |
-| 3. Overlay | not started |
+| 2. Daemon, profile picking | plays and advances tracks live; reload recovery still unproven |
+| 3. Overlay | renders and shows live state; drag, hover and rating still unchecked |
 | 4. Setup, Claude picking, ratings | ratings + starred-playlist logic written and tested; setup UI and Claude picking not started |
 
 Milestone 1 was checked by hand on Windows/Edge: list playlists, search, play
