@@ -19,13 +19,17 @@ tests/       98 tests, browser mocked
 
 | Milestone | State |
 |---|---|
-| 1. Extension + CLI driver | **written, needs a human to load it** (see below) |
-| 2. Daemon, profile picking | written, passes 98 tests against a mock extension; **not yet run against real audio** |
+| 1. Extension + CLI driver | **verified against the live player** |
+| 2. Daemon, profile picking | passes 103 tests against a mock extension; **not yet run live** |
 | 3. Overlay | not started |
 | 4. Setup, Claude picking, ratings | ratings + starred-playlist logic written and tested; setup UI and Claude picking not started |
 
-Nothing here has played a note of real audio yet. Milestone 1 needs one manual
-step that browser automation cannot do.
+Milestone 1 was checked by hand on Windows/Edge: list playlists, search, play
+(real audio), pause, resume, skip, create a playlist, and add a track to it.
+
+Two things that cost time and are now handled: content scripts do not reach a
+tab that was already open when you loaded the extension (the worker injects on
+demand instead), and Chrome refuses audio until the tab has had one real click.
 
 ## Verifying milestone 1
 
