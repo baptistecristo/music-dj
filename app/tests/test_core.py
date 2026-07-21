@@ -37,6 +37,8 @@ class FakeTransport:
         self.search_delay = 0
         self.empty_search = False
         self.playlist_tracks = []
+        self.playlists = []
+        self.fail_list = False
         self.counter = 0
 
     async def call(self, cmd, timeout=None):
@@ -64,6 +66,10 @@ class FakeTransport:
             return {"error": "playback failed"} if self.fail_play else {"ok": True}
         if kind == "playlistTracks":
             return {"trackIds": list(self.playlist_tracks)}
+        if kind == "listPlaylists":
+            if self.fail_list:
+                return {"error": "no tab"}
+            return {"playlists": list(self.playlists)}
         return {"ok": True}
 
     def sent(self, kind):
@@ -610,6 +616,103 @@ async def test_five_stars_with_no_playlist_configured_says_so():
     dj = make_dj()
     await dj.play_next()
     await dj.on_action({"action": "rate", "stars": 5})
+    assert "no starred playlist" in dj.ui_state()["notice"]
+
+
+# ------------------------------------------------------- first-run setup
+
+BANGERS = [{"id": "p.one", "name": "🦅", "canEdit": True, "trackCount": 12},
+           {"id": "p.two", "name": "gym", "canEdit": True, "trackCount": 40}]
+
+
+@pytest.mark.asyncio
+async def test_a_five_star_with_no_playlist_offers_the_picker():
+    tx = FakeTransport()
+    tx.playlists = BANGERS
+    dj = make_dj(tx)
+    track = await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    assert dj.ui_state()["setup"] == {"playlists": BANGERS}
+    assert "choose a playlist" in dj.ui_state()["notice"]
+    # The rating itself must not wait for the picker.
+    assert library.rating_for(dj.ratings, track["catalogId"], "coding") == 5
+    assert tx.sent("addToPlaylist") == []
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_playlist_persists_it_and_adds_the_prompting_track():
+    tx = FakeTransport()
+    tx.playlists = BANGERS
+    dj = make_dj(tx)
+    track = await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    await dj.on_action({"action": "chooseStarred", "id": "p.one", "name": "🦅"})
+    assert store.read_json(store.CONFIG, {})["starred_playlist"] == \
+        {"id": "p.one", "name": "🦅"}
+    assert dj.config["starred_playlist"]["id"] == "p.one"
+    adds = tx.sent("addToPlaylist")
+    assert adds and adds[0]["catalogId"] == track["catalogId"]
+    assert dj.ui_state()["setup"] is None
+    assert "added to 🦅" in dj.ui_state()["notice"]
+
+
+@pytest.mark.asyncio
+async def test_a_later_five_star_skips_the_picker_entirely():
+    tx = FakeTransport()
+    tx.playlists = BANGERS
+    dj = make_dj(tx)
+    await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    await dj.on_action({"action": "chooseStarred", "id": "p.one", "name": "🦅"})
+    listings = len(tx.sent("listPlaylists"))
+    await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    assert len(tx.sent("listPlaylists")) == listings
+    assert dj.ui_state()["setup"] is None
+    assert len(tx.sent("addToPlaylist")) == 2
+
+
+@pytest.mark.asyncio
+async def test_dismissing_the_picker_writes_nothing():
+    tx = FakeTransport()
+    tx.playlists = BANGERS
+    dj = make_dj(tx)
+    await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    await dj.on_action({"action": "dismissSetup"})
+    assert dj.ui_state()["setup"] is None
+    assert "starred_playlist" not in store.read_json(store.CONFIG, {})
+    assert tx.sent("addToPlaylist") == []
+
+
+@pytest.mark.asyncio
+async def test_choosing_without_an_id_is_harmless():
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    await dj.on_action({"action": "chooseStarred", "id": None, "name": "x"})
+    assert "starred_playlist" not in store.read_json(store.CONFIG, {})
+
+
+@pytest.mark.asyncio
+async def test_setup_with_the_extension_down_keeps_the_plain_notice():
+    tx = FakeTransport()
+    tx.playlists = BANGERS
+    dj = make_dj(tx)
+    await dj.play_next()
+    tx.connected = False               # the tab died before the five-star
+    await dj.on_action({"action": "rate", "stars": 5})
+    assert dj.ui_state()["setup"] is None
+    assert "no starred playlist" in dj.ui_state()["notice"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_playlist_listing_keeps_the_plain_notice():
+    tx = FakeTransport()
+    tx.fail_list = True
+    dj = make_dj(tx)
+    await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    assert dj.ui_state()["setup"] is None
     assert "no starred playlist" in dj.ui_state()["notice"]
 
 

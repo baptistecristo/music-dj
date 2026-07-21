@@ -43,6 +43,7 @@ class DJ:
         self.pinned = False
         self.current = None
         self.notice = None
+        self.setup = None            # playlist picker payload, when offered
         self.previews_only = False
         self.autoplay_blocked = False
         self.playing = False
@@ -89,6 +90,7 @@ class DJ:
             "rating": rating,
             "connected": bool(self.tx.connected),
             "notice": self.notice,
+            "setup": self.setup,
         }
 
     def push(self):
@@ -446,6 +448,14 @@ class DJ:
             else:
                 self.push()
 
+        elif action == "chooseStarred":
+            await self.choose_starred(msg.get("id"), msg.get("name"))
+
+        elif action == "dismissSetup":
+            self.setup = None
+            self.notice = None
+            self.push()
+
     async def rate(self, stars):
         if not self.current:
             return
@@ -460,8 +470,7 @@ class DJ:
         target = (self.config.get("starred_playlist") or {})
         pid = target.get("id")
         if not pid:
-            self.notice = "no starred playlist configured"
-            self.push()
+            await self.offer_setup()
             return
 
         existing = await self.tx.call({"cmd": "playlistTracks", "playlistId": pid},
@@ -481,3 +490,34 @@ class DJ:
         self.notice = ("couldn't add to %s" % target.get("name")) if reply.get("error") \
             else "added to %s" % (target.get("name") or "playlist")
         self.push()
+
+    async def offer_setup(self):
+        """First five-star with no playlist chosen: offer the user's own
+        editable playlists instead of a dead-end notice."""
+        if not self.tx.connected:
+            self.notice = "no starred playlist configured"
+            self.push()
+            return
+        reply = await self.tx.call({"cmd": "listPlaylists"}, timeout=60)
+        playlists = reply.get("playlists") if isinstance(reply, dict) else None
+        if reply.get("error") or not playlists:
+            self.notice = "no starred playlist configured"
+            self.push()
+            return
+        self.setup = {"playlists": playlists}
+        self.notice = "choose a playlist for five-star tracks"
+        self.push()
+
+    async def choose_starred(self, pid, name):
+        if not pid:
+            return
+        chosen = {"id": pid, "name": name or "playlist"}
+        store.merge_config({"starred_playlist": chosen})
+        self.config["starred_playlist"] = chosen
+        self.setup = None
+        self.notice = None
+        # The five-star that opened the picker still deserves its add.
+        if self.current:
+            await self.star(self.current)
+        else:
+            self.push()

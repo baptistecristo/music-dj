@@ -372,6 +372,70 @@
 
   #moods div.sep { border-top: 1px solid var(--hairline); margin-top: 3px; padding-top: 6px; }
 
+  /* -------------------------------------------------------- playlist picker
+
+     First five-star with nowhere to put it: the daemon offers the library's
+     editable playlists and this covers the panel until one is chosen. */
+
+  #setup {
+    display: none;
+    position: absolute;
+    inset: 8px;
+    flex-direction: column;
+    background: rgba(28, 28, 34, .96);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.55);
+    z-index: 20;
+    overflow: hidden;
+  }
+
+  body.open #setup.show { display: flex; }
+
+  #setuphead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px 5px;
+    font-family: var(--utility);
+    font-size: 9px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  #setupclose { cursor: pointer; font-size: 11px; letter-spacing: 0; }
+  #setupclose:hover { color: var(--text); }
+
+  #setuplist { flex: 1 1 auto; overflow-y: auto; padding-bottom: 4px; }
+
+  #setuplist .row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+
+  #setuplist .row:hover { background: var(--chip); }
+
+  #setuplist .name {
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #setuplist .count {
+    flex: 0 0 auto;
+    font-family: var(--utility);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--dim);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
@@ -415,6 +479,12 @@
 
 <div id="moods"></div>
 
+<div id="setup">
+  <div id="setuphead"><span>Playlist for five-star tracks</span><span
+       id="setupclose" title="Not now">&#x2715;</span></div>
+  <div id="setuplist"></div>
+</div>
+
 <script>
 // What the hook infers from your activity...
 const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
@@ -431,6 +501,7 @@ let socketUp = false;       // is the daemon reachable at all?
 let backoff = 500;
 let closeTimer = null;
 let open = false;
+let setupKey = null;        // what the picker was last built from
 
 // ---------------------------------------------------------------- rendering
 
@@ -505,6 +576,44 @@ function render() {
     };
     stars.appendChild(star);
   }
+
+  renderSetup();
+}
+
+function renderSetup() {
+  const su = state && state.setup;
+  const playlists = (su && su.playlists) || [];
+  el("setup").classList.toggle("show", playlists.length > 0);
+  if (!playlists.length) { setupKey = null; return; }
+
+  // Playback pushes arrive about once a second and each one lands here, so
+  // only rebuild -- and reset the scroll -- when the list itself changes.
+  const key = JSON.stringify(playlists);
+  if (key === setupKey) return;
+  setupKey = key;
+
+  const list = el("setuplist");
+  list.innerHTML = "";
+  playlists.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = p.name;
+    name.title = p.name;
+    row.appendChild(name);
+    if (p.trackCount != null) {
+      const count = document.createElement("span");
+      count.className = "count";
+      count.textContent = p.trackCount;
+      row.appendChild(count);
+    }
+    row.onclick = (ev) => {
+      ev.stopPropagation();
+      send({action: "chooseStarred", id: p.id, name: p.name});
+    };
+    list.appendChild(row);
+  });
 }
 
 // ------------------------------------------------------------------ socket
@@ -611,6 +720,11 @@ el("chip").addEventListener("click", (e) => {
 });
 
 document.addEventListener("click", () => el("moods").classList.remove("show"));
+
+el("setupclose").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  send({action: "dismissSetup"});
+});
 
 render();
 connect();

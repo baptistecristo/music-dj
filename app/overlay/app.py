@@ -53,14 +53,14 @@ class Api:
             win = self._window()
             if win:
                 win.resize(*EXPANDED)
-        set_alpha(ACTIVE_ALPHA)
+        fade_alpha(ACTIVE_ALPHA)
 
     def collapse(self):
         if not set_size(*COLLAPSED):
             win = self._window()
             if win:
                 win.resize(*COLLAPSED)
-        set_alpha(IDLE_ALPHA)
+        fade_alpha(IDLE_ALPHA)
 
 
 # --------------------------------------------------------------------- glass
@@ -155,31 +155,84 @@ def hide_from_taskbar(hwnd):
     return ok
 
 
-def find_visible_window(title):
-    """The shown top-level window with this title, or None.
+def find_windows(title, visible_only=False):
+    """This process's top-level windows with this title, in z-order.
 
     There are two of them: pywebview leaves a hidden one behind, and it is the
-    one FindWindowW hands back early in startup. Styling that one changes
-    nothing you can see, so walk the list and take the visible one.
+    one FindWindowW hands back early in startup. Callers that want the one on
+    screen pass visible_only; callers styling ahead of the first show want
+    every match, hidden included. Filtering by our own pid matters: a second
+    overlay instance would otherwise find -- and restyle, and resize, across
+    DPI contexts -- the first one's window.
     """
     user32 = ctypes.windll.user32
+    our_pid = os.getpid()
     found = []
 
     def visit(hwnd, _lparam):
-        if not user32.IsWindowVisible(hwnd):
+        if visible_only and not user32.IsWindowVisible(hwnd):
+            return True
+        pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value != our_pid:
             return True
         length = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
         if buf.value == title:
             found.append(hwnd)
-            return False
         return True
 
     proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
                               ctypes.c_void_p)(visit)
     user32.EnumWindows(proc, 0)
+    return found
+
+
+def find_visible_window(title):
+    """The shown top-level window with this title, or None."""
+    found = find_windows(title, visible_only=True)
     return found[0] if found else None
+
+
+def make_toolwindow(hwnd):
+    """Mark the window as furniture: out of Alt+Tab, out of the taskbar."""
+    user32 = ctypes.windll.user32
+    style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    wanted = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+    if wanted != style:
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, wanted)
+
+
+def hide_from_switchers_early():
+    """Set WS_EX_TOOLWINDOW before pywebview first shows the window.
+
+    The taskbar decides whether a window gets a button when it is shown, and
+    hiding an already-shown pywebview window to make it re-read the style has
+    lost the overlay for good before. Setting the style while the window is
+    still hidden sidesteps both problems, so this watches for the window from
+    a thread started ahead of webview.start() and styles every match -- the
+    hidden leftover included, where it is harmless. Alt+Tab reads the style
+    each time it opens, so even a lost race still keeps the overlay out of the
+    switcher; only the taskbar button needs the head start.
+    """
+    def watch():
+        user32 = ctypes.windll.user32
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            shown = False
+            for hwnd in find_windows(TITLE):
+                make_toolwindow(hwnd)
+                if user32.IsWindowVisible(hwnd):
+                    shown = True
+            if shown:
+                log.debug("tool-window style set")
+                return
+            time.sleep(0.01)
+        log.debug("window never appeared; tool-window style not confirmed")
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
 
 
 def apply_glass(window):
@@ -226,18 +279,18 @@ def apply_glass(window):
     # translucency without blur, which is the honest ceiling here.
     user32 = ctypes.windll.user32
 
-    # Hiding the window to swap in WS_EX_TOOLWINDOW -- the flag that keeps it
-    # out of the taskbar and Alt+Tab -- left it invisible and never brought it
-    # back, whether shown again with ShowWindow or SetWindowPos. Windows only
-    # re-reads that style on a fresh show, and pywebview owns this window's
-    # show sequence. Losing the overlay is far worse than an extra taskbar
-    # entry, so the flag stays off until it can be set before the first show.
+    # WS_EX_TOOLWINDOW is normally set by hide_from_switchers_early before the
+    # first show; re-asserting it here is free and covers a lost race. Never
+    # hide-and-reshow to force it -- that has lost the overlay for good.
     try:
         style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+        make_toolwindow(hwnd)
         _hwnd = hwnd
         set_alpha(IDLE_ALPHA)      # starts collapsed, so start faded
         set_size(*COLLAPSED)
+        # Belt and braces: if the style landed after the first show, the
+        # button is already up and only the shell API takes it down.
         hide_from_taskbar(hwnd)
         rect = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -278,6 +331,43 @@ def set_alpha(value):
             _hwnd, 0, max(40, min(255, int(value))), LWA_ALPHA)
     except Exception:
         log.debug("could not change alpha", exc_info=True)
+
+
+_fade_gen = [0]                 # bumping this abandons any fade in flight
+
+
+def fade_alpha(target, duration=0.15):
+    """Ease the layered alpha to target. The alpha is an OS property CSS
+    cannot transition, so the snap is smoothed here instead."""
+    if not _hwnd:
+        return
+    _fade_gen[0] += 1
+    gen = _fade_gen[0]
+    target = max(40, min(255, int(target)))
+
+    def run():
+        user32 = ctypes.windll.user32
+        key = ctypes.wintypes.DWORD()
+        alpha = ctypes.c_ubyte()
+        flags = ctypes.wintypes.DWORD()
+        start = target
+        try:
+            if user32.GetLayeredWindowAttributes(
+                    _hwnd, ctypes.byref(key), ctypes.byref(alpha),
+                    ctypes.byref(flags)):
+                start = alpha.value
+        except Exception:
+            pass
+        if start == target:
+            return
+        steps = 8
+        for i in range(1, steps + 1):
+            if _fade_gen[0] != gen:
+                return
+            set_alpha(start + (target - start) * i / steps)
+            time.sleep(duration / steps)
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def saved_position(config):
@@ -373,6 +463,7 @@ def _run(args):
     )
     save_now = remember_position(window)
     window.events.closing += lambda *_a: save_now()
+    hide_from_switchers_early()
 
     def on_start(win):
         if args.solid:

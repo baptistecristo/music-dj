@@ -88,7 +88,7 @@ docs wants the same low-vocal register as coding.
 ## Tests
 
 ```
-python -m pytest tests/ -q      # 161 passing
+python -m pytest tests/ -q      # 168 passing
 python tools/transport_smoke.py # transport, with a mock extension
 ```
 
@@ -103,28 +103,51 @@ MusicKit actually playing.
 |---|---|
 | 1. Extension + CLI driver | verified against the live player |
 | 2. Daemon, profile picking | plays and advances tracks live |
-| 3. Overlay | renders live state; drag and rating unchecked |
-| 4. Setup, Claude picking, ratings | Claude picking verified live; **first-run setup not built** |
+| 3. Overlay | renders live state; drag, position memory and window styling verified live |
+| 4. Setup, Claude picking, ratings | Claude picking verified live; first-run setup built and tested |
 
-Known gaps, roughly by how much they matter:
+What used to be the gaps list, with how each one closed:
 
-- **First-run setup does not exist.** Nothing writes `starred_playlist` into
-  `config.json`, so five stars stores the rating and then reports that no
-  playlist is configured. Add it by hand to wire up the rest:
-  `{"starred_playlist": {"id": "p.xxxx", "name": "..."}}`
-- **Reload recovery is unproven live.** The code is written and tested against
-  mocks; both live attempts were killed by autoplay blocking before it ran.
-- **Never run 30 minutes unattended.**
-- **Drag and remembered position are unverified.** The drag mechanism was
-  configured but untagged for a while, so it did nothing at all.
-- `trackCount` on library playlists may come back empty; the setup picker
-  wants it. `previewOnly` detection has never fired, since the subscription is
-  active.
+- **First-run setup now exists.** The first five-star with nothing configured
+  opens a picker in the overlay, fed by the library's editable playlists
+  (name and track count). Choosing one writes `starred_playlist` to
+  `config.json` and immediately adds the track that prompted it; dismissing
+  keeps the rating and asks again next time. If the extension is down or the
+  listing fails, the old "no starred playlist configured" notice stands.
+- **Reload recovery proven live.** A forced tab reload mid-track: in-flight
+  commands failed cleanly ("the tab reloaded mid-command"), the fresh page
+  re-announced, and music was audibly playing again about five seconds later
+  with no human help.
+- **35 minutes unattended, proven.** Seventeen transitions, the connection
+  never dropped, no stalls, no autoplay blocks, no human input. The soak also
+  caught a real bug the mocks never could: on most natural track ends the
+  *next* track played ~3 seconds and was then skipped. Cause: swapping the
+  queue makes MusicKit fire an ended state after `lastItemId` already points
+  at the new song, so the echo wears the new track's id and walks through the
+  foreign-trackEnded guard. Fixed in the bridge (`suppressEndedUntil`: ended
+  states are gagged for 5s after a deliberate play). The fix rides in on the
+  next DJ-tab reload -- success looks like tracks no longer dying at 3
+  seconds after a natural end.
+- **Out of the taskbar and Alt+Tab.** WS_EX_TOOLWINDOW is now set from a
+  watcher thread started ahead of `webview.start()`, so the style lands
+  before the first show and the button never appears. Verified on the live
+  window. Setting it on an already-shown window is also safe -- what is NOT
+  safe is hiding and re-showing to force a style re-read; that loses the
+  window and stays banned.
+- **Drag and remembered position verified.** Moving the window saves x/y
+  (0.6 s debounce) and a restart restores them.
+- `trackCount` fixed: library playlists have no documented trackCount
+  attribute (checked against Apple's API docs), so the listing now asks for
+  `include=tracks` and falls back to `relationships.tracks.meta.total`.
+- `previewOnly` reviewed against the MusicKit v3 docs: the
+  `musicUserToken`/`isAuthorized` check with the `previewOnly` override is
+  correct as written. It still has never fired live, since the subscription
+  is active.
 
 Limitations rather than bugs: there is no frosted blur (WebView2 paints over
-the acrylic, so uniform alpha is the ceiling), the alpha snaps rather than
-fades, and a Claude batch takes ~17s (nothing waits on it -- the queue refills
-mid-track).
+the acrylic, so uniform alpha is the ceiling -- though the alpha now eases
+over ~150 ms instead of snapping), and a Claude batch takes ~17s (nothing
+waits on it -- the queue refills mid-track).
 
 ## Things that cost real time
 
@@ -132,6 +155,11 @@ mid-track).
   loaded. The worker injects on demand instead.
 - Chrome and Edge refuse audio until the tab has had a real click, and Edge's
   "Limit" autoplay default re-blocks it.
+- Apple Music registers `beforeunload`, so reloading the DJ tab throws up a
+  blocking "Reload site?" dialog first. While it is up the page's JS is
+  frozen -- position stops, commands hang -- which reads as a mysterious hang
+  rather than as a dialog. Earlier "killed by autoplay" reload attempts were
+  probably this.
 - `claude` on Windows is a `.CMD`, so it runs through `cmd.exe`, which cuts a
   multi-line argument at the first newline. The prompt goes over stdin.
 - pywebview's `resize()` is clamped by WinForms' minimum width: ask for 72 and

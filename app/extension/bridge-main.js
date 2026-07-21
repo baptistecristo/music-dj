@@ -30,6 +30,7 @@
   let lastState = null;
   let lastItemId = null;
   let lastPositionSent = 0;
+  let suppressEndedUntil = 0;   // see play(): queue swaps echo a false end
 
   const send = (msg) => window.postMessage({ __musicdj: OUT, payload: msg }, "*");
   const emit = (evt, extra) => send(Object.assign({ evt }, extra || {}));
@@ -126,6 +127,11 @@
 
   async function play(catalogId) {
     if (!mk) throw new Error("MusicKit not ready");
+    // Swapping the queue makes MusicKit fire an ended/completed state for the
+    // teardown -- after lastItemId already points at the new song, so it
+    // reads as the new track ending and the daemon burns it 3s in. Nothing
+    // real ends this soon after a deliberate play, so gag the report.
+    suppressEndedUntil = Date.now() + 5000;
     await mk.setQueue({ song: String(catalogId) });
     kick();
     await sleep(3000);
@@ -151,17 +157,23 @@
     const limit = 100;
     for (let offset = 0; offset < 2000; offset += limit) {
       const page = await api("/v1/me/library/playlists?limit=" + limit +
-                             "&offset=" + offset + "&extend=trackCount");
+                             "&offset=" + offset +
+                             "&extend=trackCount&include=tracks");
       const items = page.data || [];
       for (const p of items) {
         const a = p.attributes || {};
         if (a.canEdit !== true) continue; // can't add tracks to the others
+        // Library playlists have no documented trackCount attribute, so
+        // extend=trackCount is a polite request Apple may ignore; the tracks
+        // relationship's meta.total is the count that actually arrives.
+        const rel = (p.relationships && p.relationships.tracks) || {};
         out.push({
           id: p.id,
           name: a.name || "(untitled)",
           canEdit: true,
-          trackCount: (p.meta && p.meta.trackCount) != null ? p.meta.trackCount
-                      : (a.trackCount != null ? a.trackCount : null),
+          trackCount: a.trackCount != null ? a.trackCount
+                      : (rel.meta && rel.meta.total != null ? rel.meta.total
+                         : null),
         });
       }
       if (items.length < limit) break;
@@ -289,6 +301,7 @@
     lastState = state;
 
     if (state === S_ENDED || state === S_COMPLETED) {
+      if (Date.now() < suppressEndedUntil) return;   // queue-swap echo
       emit("trackEnded", { catalogId: lastItemId });
       return;
     }
