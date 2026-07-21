@@ -58,6 +58,9 @@ Code:
 
 - [Claude Code](https://claude.com/claude-code) (`npm install -g
   @anthropic-ai/claude-code`)
+- Python 3 (for the mood-detection hooks). On Windows, install it from
+  [python.org](https://www.python.org/downloads/) or the Microsoft Store —
+  the hooks try `python3` first and fall back to `python`.
 - Chrome with the **Claude in Chrome** extension (for playback control)
 - An account on your music service (subscription tiers: see the guide the
   installer prints)

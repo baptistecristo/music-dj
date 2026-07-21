@@ -59,6 +59,14 @@ def main():
 
     event = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
+        # The payload is UTF-8 JSON. On Windows, piped stdin defaults to the
+        # legacy locale codepage (mangling accented text, so non-English mood
+        # keywords never match) and may carry a BOM (which breaks json.load
+        # entirely) — utf-8-sig handles both.
+        sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
+    except Exception:
+        pass
+    try:
         data = json.load(sys.stdin)
     except Exception:
         data = {}
