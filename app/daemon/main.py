@@ -45,11 +45,16 @@ async def run(args):
     await asyncio.gather(srv.run(), dj.watch_state(), start_when_ready(dj))
 
 
-async def start_when_ready(dj, poll=2.0):
-    """Begin playing as soon as the extension shows up, not before."""
+async def start_when_ready(dj, poll=3.0):
+    """Begin playing as soon as the extension shows up, not before.
+
+    ensure_playing() does the "is anything already starting?" check itself;
+    testing dj.current here would start a second track over the first while
+    the first was still being confirmed.
+    """
     while True:
-        if dj.tx.connected and dj.current is None:
-            await dj.play_next()
+        if dj.tx.connected:
+            await dj.ensure_playing()
         await asyncio.sleep(poll)
 
 

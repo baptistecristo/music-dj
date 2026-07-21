@@ -239,6 +239,18 @@ class DJ:
         async with self._play_lock:
             return await self._play_next()
 
+    async def ensure_playing(self):
+        """Start the music if nothing is playing, and only then.
+
+        Confirming a track takes several seconds, during which `current` is
+        still None. A caller polling on that alone starts a second track over
+        the first a couple of seconds in, which is what it sounds like: a song
+        begins, then gets replaced. The in-flight check is the fix.
+        """
+        if self.current is not None or self._play_lock.locked():
+            return None
+        return await self.play_next()
+
     async def _play_next(self):
         if not self.tx.connected:
             self.notice = "no player"

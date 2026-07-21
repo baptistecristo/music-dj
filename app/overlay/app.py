@@ -8,6 +8,7 @@ window on hover and remembering where you left it.
 """
 
 import ctypes
+import ctypes.wintypes
 import logging
 import os
 import threading
@@ -23,8 +24,8 @@ from daemon import store
 # scrubber with elapsed/remaining times, then hearts, transport and mood.
 # The expanded height is the sum of those rows plus padding, with a little
 # slack -- shrink it and the notice line clips.
-COLLAPSED = (64, 64)
-EXPANDED = (344, 196)
+COLLAPSED = (72, 72)
+EXPANDED = (368, 210)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "index.html")
@@ -48,15 +49,17 @@ class Api:
         return webview.windows[0] if webview.windows else None
 
     def expand(self):
-        win = self._window()
-        if win:
-            win.resize(*EXPANDED)
+        if not set_size(*EXPANDED):
+            win = self._window()
+            if win:
+                win.resize(*EXPANDED)
         set_alpha(ACTIVE_ALPHA)
 
     def collapse(self):
-        win = self._window()
-        if win:
-            win.resize(*COLLAPSED)
+        if not set_size(*COLLAPSED):
+            win = self._window()
+            if win:
+                win.resize(*COLLAPSED)
         set_alpha(IDLE_ALPHA)
 
 
@@ -81,7 +84,12 @@ WS_EX_APPWINDOW = 0x00040000
 LWA_ALPHA = 0x00000002
 
 SW_HIDE = 0
-SW_SHOWNA = 8                   # show again without stealing focus
+
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
 # Idle it sits back and lets the desktop through; under the pointer it firms
 # up so the text is readable while you are actually looking at it.
 ACTIVE_ALPHA = 235
@@ -95,6 +103,33 @@ class _Margins(ctypes.Structure):
                 ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
 
 
+def find_visible_window(title):
+    """The shown top-level window with this title, or None.
+
+    There are two of them: pywebview leaves a hidden one behind, and it is the
+    one FindWindowW hands back early in startup. Styling that one changes
+    nothing you can see, so walk the list and take the visible one.
+    """
+    user32 = ctypes.windll.user32
+    found = []
+
+    def visit(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if buf.value == title:
+            found.append(hwnd)
+            return False
+        return True
+
+    proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
+                              ctypes.c_void_p)(visit)
+    user32.EnumWindows(proc, 0)
+    return found[0] if found else None
+
+
 def apply_glass(window):
     """Frost the window using Windows 11 acrylic.
 
@@ -106,14 +141,8 @@ def apply_glass(window):
     # to asking Windows for the window by its title.
     global _hwnd
     hwnd = None
-    for _ in range(60):
-        try:
-            hwnd = int(window.native.Handle)
-            if hwnd:
-                break
-        except Exception:
-            pass
-        hwnd = ctypes.windll.user32.FindWindowW(None, TITLE)
+    for _ in range(100):
+        hwnd = find_visible_window(TITLE)
         if hwnd:
             break
         time.sleep(0.05)
@@ -143,25 +172,47 @@ def apply_glass(window):
     # above usually ends up hidden behind it. Layered-window alpha is applied
     # by the compositor to the finished window, so it shows through regardless:
     # translucency without blur, which is the honest ceiling here.
+    user32 = ctypes.windll.user32
+
+    # Hiding the window to swap in WS_EX_TOOLWINDOW -- the flag that keeps it
+    # out of the taskbar and Alt+Tab -- left it invisible and never brought it
+    # back, whether shown again with ShowWindow or SetWindowPos. Windows only
+    # re-reads that style on a fresh show, and pywebview owns this window's
+    # show sequence. Losing the overlay is far worse than an extra taskbar
+    # entry, so the flag stays off until it can be set before the first show.
     try:
-        user32 = ctypes.windll.user32
         style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        style = (style | WS_EX_LAYERED | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
-
-        # Windows only re-reads the taskbar-affecting styles when a window is
-        # shown, so it has to be hidden across the change. SW_SHOWNA brings it
-        # back without pulling focus off whatever you were typing in.
-        user32.ShowWindow(hwnd, SW_HIDE)
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-        user32.ShowWindow(hwnd, SW_SHOWNA)
-
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
         _hwnd = hwnd
         set_alpha(IDLE_ALPHA)      # starts collapsed, so start faded
+        set_size(*COLLAPSED)
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
         log.info("translucency on: %d idle, %d under the pointer; "
-                 "hidden from the taskbar and Alt+Tab",
-                 IDLE_ALPHA, ACTIVE_ALPHA)
+                 "window is %dx%d, asked for %dx%d",
+                 IDLE_ALPHA, ACTIVE_ALPHA,
+                 rect.right - rect.left, rect.bottom - rect.top, *COLLAPSED)
     except Exception:
-        log.info("could not restyle the window; it stays opaque and in the taskbar")
+        log.info("could not restyle the window; it stays opaque")
+
+
+def set_size(width, height):
+    """Resize past the WinForms minimum.
+
+    pywebview's resize() goes through WinForms, which refuses to go below its
+    own minimum tracking width -- ask for 72 wide and you get 232. SetWindowPos
+    talks to the window manager directly and is not second-guessed.
+    """
+    if not _hwnd:
+        return False
+    try:
+        ctypes.windll.user32.SetWindowPos(
+            _hwnd, 0, 0, 0, int(width), int(height),
+            SWP_NOMOVE | SWP_NOACTIVATE)
+        return True
+    except Exception:
+        log.debug("could not resize", exc_info=True)
+        return False
 
 
 def set_alpha(value):

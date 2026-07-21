@@ -189,6 +189,45 @@ async def test_the_queue_refills_itself_before_running_out():
 
 
 @pytest.mark.asyncio
+async def test_a_second_start_does_not_cut_in_over_the_first():
+    # Confirming a play takes seconds, and `current` stays None throughout.
+    # A poller watching only that used to start a second track a couple of
+    # seconds into the first -- a song began, then swapped for another.
+    tx = FakeTransport()
+    tx.search_delay = 0.05
+    dj = make_dj(tx)
+
+    async def slow_play(cmd, timeout=None):
+        if cmd.get("cmd") == "play":
+            tx.calls.append(cmd)
+            await asyncio.sleep(0.3)      # the player taking its time
+            return {"ok": True, "state": 2}
+        return await FakeTransport.call(tx, cmd, timeout)
+
+    tx.call = slow_play
+    first = asyncio.create_task(dj.ensure_playing())
+    await asyncio.sleep(0.1)
+    await dj.ensure_playing()             # the next poll tick, mid-play
+    await first
+    assert len(tx.sent("play")) == 1, "started a second track over the first"
+
+
+@pytest.mark.asyncio
+async def test_ensure_playing_does_nothing_when_a_track_is_already_on():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.ensure_playing()
+    assert dj.tx.sent("play") == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_playing_starts_the_music_when_there_is_silence():
+    dj = make_dj()
+    assert await dj.ensure_playing() is not None
+
+
+@pytest.mark.asyncio
 async def test_a_failed_play_does_not_record_history_or_crash():
     tx = FakeTransport()
     tx.fail_play = True
