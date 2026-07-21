@@ -8,7 +8,8 @@ DJ tab's id from `tabs_context_mcp`.
 
 - **Never `await mk.play()`** — it can hang the evaluation for 45s+. Call
   `mk.play()` fire-and-forget, wait ~3s, then poll state.
-- **Chrome autoplay policy:** a tab that has never had a real user click
+- **Chromium autoplay policy** (applies to Chrome, Edge, Brave, Arc, Opera,
+  Vivaldi alike)**:** a tab that has never had a real user click
   cannot emit audio. If `playbackState` sticks at 1 (loading) with
   `currentPlaybackTime` 0, ask the user to click play once in the tab; after
   that, script-driven playback works for the rest of the browser session.

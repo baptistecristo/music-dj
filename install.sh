@@ -22,16 +22,38 @@ idx=$((choice-1))
 service="${services[$idx]}"
 echo "  -> ${names[$idx]} it is."
 
+echo ""
+echo "  Which browser do you want the DJ to play in?"
+echo "  (It needs the 'Claude in Chrome' extension installed there. All of these"
+echo "   are Chromium-based, so they all take it from the Chrome Web Store.)"
+browsers=(chrome edge brave arc opera vivaldi)
+bnames=("Chrome" "Edge" "Brave" "Arc" "Opera" "Vivaldi")
+for i in "${!bnames[@]}"; do printf "    [%d] %s\n" "$((i+1))" "${bnames[$i]}"; done
+echo ""
+while :; do
+    read -rp "  Enter 1-${#browsers[@]}: " bchoice
+    if [[ "$bchoice" =~ ^[0-9]+$ ]] && [ "$bchoice" -ge 1 ] && [ "$bchoice" -le "${#browsers[@]}" ]; then
+        break
+    fi
+    echo "  Please enter a number between 1 and ${#browsers[@]}."
+done
+bidx=$((bchoice-1))
+browser="${browsers[$bidx]}"
+echo "  -> DJ-ing in ${bnames[$bidx]}."
+
 mkdir -p "$HOME/.music-dj"
 config="$HOME/.music-dj/config.json"
-python3 - "$service" "$config" <<'EOF'
+python3 - "$service" "$browser" "$config" <<'EOF'
 import json, sys
-service, path = sys.argv[1], sys.argv[2]
+service, browser, path = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     cfg = json.load(open(path))
 except Exception:
     cfg = {"enabled": True}
 cfg["service"] = service
+cfg["browser"] = browser
+# Cleared on purpose: the agent binds a real deviceId on first run.
+cfg["browser_device_id"] = ""
 json.dump(cfg, open(path, "w"), indent=2)
 EOF
 echo "  Saved your choice to $config"
@@ -53,8 +75,12 @@ else
 fi
 
 echo ""
-echo "  You'll also need Chrome with the 'Claude in Chrome' extension for playback"
-echo "  control (macOS + Apple Music works natively without it)."
+echo "  You'll also need ${bnames[$bidx]} with the 'Claude in Chrome' extension for"
+echo "  playback control (macOS + Apple Music works natively without it)."
+if [ "$browser" != "chrome" ]; then
+    echo "  Install the extension in ${bnames[$bidx]} itself — having it in Chrome does"
+    echo "  NOT make ${bnames[$bidx]} controllable."
+fi
 echo ""
 echo "  Last step — open 'claude' and say:  set up my music DJ"
 echo "  The agent scans your library, learns your taste, and saves the profile to"

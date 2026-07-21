@@ -30,9 +30,9 @@ def emit_context(event, mood):
         return
     marker = (
         "[music-dj] Mood shift detected: %s. If the browser DJ is active "
-        "(Apple Music 'DJ' tab via Claude in Chrome) or the user has asked "
-        "for music this session, switch the music to match — see the "
-        "music-dj skill. Otherwise ignore this silently." % mood)
+        "(the 'DJ' web-player tab in the user's configured browser) or the "
+        "user has asked for music this session, switch the music to match — "
+        "see the music-dj skill. Otherwise ignore this silently." % mood)
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": hook_event,

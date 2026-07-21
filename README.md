@@ -19,7 +19,8 @@ Tidal, Amazon Music, Qobuz, Bandcamp, and Pandora**.
   tests, passing builds, doc writing, research — with debouncing so the
   music doesn't flap.
 - **Plays through your browser.** The DJ drives your service's web player
-  in a Chrome tab named **DJ** via the Claude in Chrome extension — so it
+  in a tab named **DJ**, in the browser you pick at install (Chrome, Edge,
+  Brave, Arc, Opera or Vivaldi), via the Claude in Chrome extension — so it
   works from any Claude interface, on Windows too (where the Apple Music /
   Spotify desktop apps can't be scripted at all). On macOS with Apple
   Music, there's also a native AppleScript mode.
@@ -61,7 +62,9 @@ Code:
 - Python 3 (for the mood-detection hooks). On Windows, install it from
   [python.org](https://www.python.org/downloads/) or the Microsoft Store —
   the hooks try `python3` first and fall back to `python`.
-- Chrome with the **Claude in Chrome** extension (for playback control)
+- A Chromium browser — Chrome, Edge, Brave, Arc, Opera or Vivaldi — with the
+  **Claude in Chrome** extension installed *in that browser* (for playback
+  control). The installer asks which one you want the DJ to use.
 - An account on your music service (subscription tiers: see the guide the
   installer prints)
 
@@ -77,8 +80,8 @@ The agent opens your service in a tab named "DJ", asks you to sign in
 (it never touches your credentials), scans your whole library, learns your
 taste, saves the profile locally, and plays a first song matched to your
 mood. From then on it DJs from any Claude session — terminal, desktop, even
-your phone via a cloud session, as long as Chrome is open on the machine
-with the speakers.
+your phone via a cloud session, as long as your chosen browser is open on the
+machine with the speakers.
 
 ## Repo layout
 
