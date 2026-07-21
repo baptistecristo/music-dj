@@ -196,6 +196,7 @@ const MOODS = ["coding", "writing", "debugging", "building", "research"];
 const el = (id) => document.getElementById(id);
 let state = null;
 let ws = null;
+let socketUp = false;      // is the daemon reachable at all?
 let backoff = 500;
 let closeTimer = null;
 let open = false;
@@ -212,8 +213,13 @@ function render() {
     el("track").querySelector(".title").textContent = np.title;
     el("track").querySelector(".artist").textContent =
       np.artist ? "· " + np.artist : "";
+  } else if (!socketUp) {
+    // Nothing has ever arrived: the daemon is not running, which is a
+    // different problem from the browser tab being closed.
+    el("track").textContent = "daemon not running";
   } else {
-    el("track").textContent = (state && state.connected) ? "nothing playing" : "no player";
+    el("track").textContent = state && state.connected
+      ? "nothing playing" : "no DJ tab open";
   }
 
   el("art").src = (np && np.artworkUrl) ||
@@ -245,13 +251,14 @@ function connect() {
   } catch (e) {
     return setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
   }
-  ws.onopen = () => { backoff = 500; };
+  ws.onopen = () => { backoff = 500; socketUp = true; render(); };
   ws.onmessage = (ev) => {
     try { state = JSON.parse(ev.data); render(); } catch (e) {}
   };
   ws.onclose = () => {
     // The daemon may not be up yet, or may have restarted. Keep the last
     // known track on screen but grey it out rather than blanking the strip.
+    socketUp = false;
     if (state) state.connected = false;
     render();
     setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
