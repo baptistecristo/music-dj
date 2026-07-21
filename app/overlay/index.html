@@ -53,6 +53,10 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+    /* The window is a fixed height but the why-line is one or two lines and the
+       notice comes and goes, so centre the stack: the slack is shared top and
+       bottom instead of pooling under the controls. */
+    justify-content: center;
     padding: 11px;
     border-radius: 10px;
     /* Glass: tinted enough to keep text legible over a bright desktop, and
@@ -130,7 +134,10 @@
   }
 
   body.open .panel { opacity: 1; transform: none; pointer-events: auto; }
-  body:not(.open) .panel { display: none; }
+  /* Qualified by #shell so this outranks the id selectors below that set
+     display on individual rows -- otherwise the scrubber and the controls
+     would sit on top of the collapsed album art. */
+  body:not(.open) #shell .panel { display: none; }
 
   /* -------------------------------------------------------------- the naming */
 
@@ -400,8 +407,8 @@ const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
 // takes either, so both are worth offering.
 const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
 
-const PLAY = "", PAUSE = "";
-const HEART = "", HEART_FILLED = "";
+const PLAY = "\uE768", PAUSE = "\uE769";
+const HEART = "\uEB51", HEART_FILLED = "\uEB52";
 
 const el = (id) => document.getElementById(id);
 let state = null;

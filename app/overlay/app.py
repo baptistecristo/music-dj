@@ -18,10 +18,13 @@ import webview
 from daemon import store
 
 # Collapsed is just the album art, so the window is a sleeve-sized tile rather
-# than a strip. It opens on hover into the liner notes: title, artist, the
-# reason this track was picked, transport and rating.
+# than a strip. It opens on hover into a mini player shaped like Apple Music's:
+# art and naming on top, the reason this track was picked, a full-width
+# scrubber with elapsed/remaining times, then hearts, transport and mood.
+# The expanded height is the sum of those rows plus padding, with a little
+# slack -- shrink it and the notice line clips.
 COLLAPSED = (64, 64)
-EXPANDED = (320, 120)
+EXPANDED = (344, 196)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "index.html")
