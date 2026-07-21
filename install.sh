@@ -11,7 +11,13 @@ services=(apple-music spotify soundcloud youtube-music deezer tidal amazon-music
 names=("Apple Music" "Spotify" "SoundCloud" "YouTube Music" "Deezer" "Tidal" "Amazon Music" "Qobuz" "Bandcamp" "Pandora (US only)")
 for i in "${!names[@]}"; do printf "    [%d] %s\n" "$((i+1))" "${names[$i]}"; done
 echo ""
-read -rp "  Enter 1-${#services[@]}: " choice
+while :; do
+    read -rp "  Enter 1-${#services[@]}: " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#services[@]}" ]; then
+        break
+    fi
+    echo "  Please enter a number between 1 and ${#services[@]}."
+done
 idx=$((choice-1))
 service="${services[$idx]}"
 echo "  -> ${names[$idx]} it is."
@@ -24,7 +30,13 @@ browsers=(chrome edge brave arc opera vivaldi)
 bnames=("Chrome" "Edge" "Brave" "Arc" "Opera" "Vivaldi")
 for i in "${!bnames[@]}"; do printf "    [%d] %s\n" "$((i+1))" "${bnames[$i]}"; done
 echo ""
-read -rp "  Enter 1-${#browsers[@]}: " bchoice
+while :; do
+    read -rp "  Enter 1-${#browsers[@]}: " bchoice
+    if [[ "$bchoice" =~ ^[0-9]+$ ]] && [ "$bchoice" -ge 1 ] && [ "$bchoice" -le "${#browsers[@]}" ]; then
+        break
+    fi
+    echo "  Please enter a number between 1 and ${#browsers[@]}."
+done
 bidx=$((bchoice-1))
 browser="${browsers[$bidx]}"
 echo "  -> DJ-ing in ${bnames[$bidx]}."

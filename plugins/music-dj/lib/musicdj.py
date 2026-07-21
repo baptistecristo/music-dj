@@ -32,10 +32,14 @@ DEFAULT_CONFIG = {
     "browser_device_id": "",
     "shuffle": True,
     # Don't switch playlists more often than this (seconds).
-    "min_seconds_between_switches": 120,
+    "min_seconds_between_switches": 300,
     # A new mood must be observed this many times in a row before switching
     # (prevents flapping when activity bounces around).
     "confirmations_needed": 2,
+    # Moods that mean "things just went wrong": they switch on a single
+    # observation and with half the debounce window, so the calm-down music
+    # lands while it still matters.
+    "urgent_moods": ["debugging"],
     # If the Music app isn't running, stay silent instead of launching it.
     "launch_music_if_closed": False,
     # Pause playback when a Claude session ends.
@@ -188,29 +192,50 @@ def list_playlists():
 # ------------------------------------------------------------- classification
 
 _TEST_RE = re.compile(
-    r"\b(pytest|jest|vitest|mocha|rspec|go test|cargo test|npm (run )?test|"
-    r"yarn test|pnpm test|phpunit|tox|ctest|unittest)\b")
+    r"\b(pytest|jest|vitest|mocha|rspec|go test|cargo (test|nextest)|"
+    r"npm (run )?test|yarn test|pnpm test|bun test|deno test|phpunit|tox|"
+    r"ctest|unittest|dotnet test|mvn test|gradlew? test|swift test|mix test|"
+    r"rake test|playwright test|cypress run)\b")
 _BUILD_RE = re.compile(
-    r"\b(npm run build|yarn build|pnpm build|cargo build|go build|docker build|"
-    r"docker compose|xcodebuild|gradle|mvn|tsc\b|vite build|webpack|"
-    r"git push|git commit|deploy)\b|(^|\s|&&\s*)make(\s|$)")
+    r"\b(npm run build|yarn build|pnpm build|bun run build|cargo build|"
+    r"go build|docker build|docker compose|xcodebuild|gradle|mvn|tsc\b|"
+    r"vite build|webpack|next build|dotnet build|swift build|ninja|bazel|"
+    r"cmake --build|mix compile|git push|git commit|deploy)\b"
+    r"|(^|\s|&&\s*)make(\s|$)")
 _FAIL_RE = re.compile(
-    r"Traceback \(most recent call last\)|FAILED|npm ERR!|error\[E|error:|"
-    r"Error:|AssertionError|assertion failed|Segmentation fault|"
-    r"Exception in|Test Suites?: .*failed|\bFAIL\b")
+    r"Traceback \(most recent call last\)|FAILED|npm ERR!|npm error|"
+    r"error\[E|error:|Error:|error TS\d|AssertionError|assertion failed|"
+    r"Segmentation fault|Exception in|Test Suites?: .*failed|\bFAIL\b|"
+    r"panicked at|BUILD FAILED|Compilation (error|failed)|ELIFECYCLE|"
+    r"UnhandledPromiseRejection|\b\d+ (failing|failed)\b")
 _CODE_EXTS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp",
     ".cc", ".h", ".hpp", ".rb", ".php", ".swift", ".kt", ".sh", ".bash",
     ".css", ".scss", ".sql", ".vue", ".svelte", ".zig", ".lua", ".ex", ".exs",
     ".json", ".yaml", ".yml", ".toml"}
 _DOC_EXTS = {".md", ".mdx", ".txt", ".rst", ".tex", ".adoc", ".html"}
-_RESEARCH_TOOLS = {"WebSearch", "WebFetch", "Grep", "Glob", "Read", "Task", "Explore"}
+_RESEARCH_TOOLS = {"WebSearch", "WebFetch", "Task", "Explore", "Agent"}
+# Prompt classification is bilingual (English + French) and errs on the side
+# of returning None: a wrong mood switch is worse than no switch.
 _PROMPT_DEBUG_RE = re.compile(
-    r"\b(bug|debug|broken|fix|error|crash|failing|regression|doesn'?t work)\b", re.I)
+    r"\b(bug|bogue|debug|broken|fix(e[sd])?|error|erreur|crash|plante|"
+    r"failing|regression|régression|doesn'?t work|not working|"
+    r"stopped working|marche (pas|plus)|fonctionne (pas|plus)|"
+    r"corrige[rz]?|répare[rz]?|échoue|stack ?trace|traceback)\b", re.I)
 _PROMPT_WRITE_RE = re.compile(
-    r"\b(write|draft|blog|docs?|documentation|readme|essay|email|article|report)\b", re.I)
+    r"\b(draft|blog|docs?|documentation|readme|essay|email|e-mail|article|"
+    r"report|newsletter|changelog|release notes|rédige[rz]?|courriel|"
+    r"rapport|billet)\b", re.I)
 _PROMPT_RESEARCH_RE = re.compile(
-    r"\b(research|investigate|look up|find out|compare|explore|search)\b", re.I)
+    r"\b(research|investigate|look up|find out|compare|explore|search|"
+    r"recherche[rz]?|renseigne[rz]?|investigue[rz]?|explorer?)\b", re.I)
+_PROMPT_SHIP_RE = re.compile(
+    r"\b(ship( it)?|deploy|déploie[rz]?|release|publish|publie[rz]?|"
+    r"mets? en (prod|ligne))\b", re.I)
+_PROMPT_CODE_RE = re.compile(
+    r"\b(implement|implémente[rz]?|refactor|add (a |the )?"
+    r"(feature|endpoint|button|test)|build (a|an|the|out)\b|"
+    r"développe[rz]?|ajoute[rz]?|créé?e[rz]?)\b", re.I)
 
 
 def _ext_of(tool_input):
@@ -245,6 +270,12 @@ def classify_tool(tool_name, tool_input, tool_response):
             return "coding"
         return "coding"
 
+    if tool_name == "Read":
+        # Reading docs is research; reading code is just part of whatever
+        # the user is already doing — no signal (it used to count as
+        # research, which dragged every coding session toward ambient).
+        return "research" if _ext_of(tool_input) in _DOC_EXTS else None
+
     if tool_name in _RESEARCH_TOOLS:
         return "research"
 
@@ -252,14 +283,18 @@ def classify_tool(tool_name, tool_input, tool_response):
 
 
 def classify_prompt(text):
-    """Map a user prompt to a mood, or None."""
+    """Map a user prompt to a mood, or None. Understands English and French."""
     text = text or ""
     if _PROMPT_DEBUG_RE.search(text):
         return "debugging"
+    if _PROMPT_SHIP_RE.search(text):
+        return "building"
     if _PROMPT_WRITE_RE.search(text):
         return "writing"
     if _PROMPT_RESEARCH_RE.search(text):
         return "research"
+    if _PROMPT_CODE_RE.search(text):
+        return "coding"
     return None
 
 
@@ -277,6 +312,11 @@ def decide_switch(mood, force=False):
     st = load_state()
     now = time.time()
 
+    # "Things just broke" moods react faster: half the debounce window and a
+    # single observation is enough. Calm music 5 minutes after the failure
+    # would miss the moment.
+    urgent = mood in cfg.get("urgent_moods", DEFAULT_CONFIG["urgent_moods"])
+
     if not force:
         if st.get("current_mood") == mood:
             if st.get("pending_mood"):
@@ -284,9 +324,12 @@ def decide_switch(mood, force=False):
                 st["pending_count"] = 0
                 save_state(st)
             return False, "already in mood %s" % mood
-        if now - st.get("last_switch", 0) < cfg.get("min_seconds_between_switches", 120):
+        min_wait = float(cfg.get("min_seconds_between_switches", 300))
+        if urgent:
+            min_wait /= 2
+        if now - st.get("last_switch", 0) < min_wait:
             return False, "switched too recently"
-        need = int(cfg.get("confirmations_needed", 2))
+        need = 1 if urgent else int(cfg.get("confirmations_needed", 2))
         if need > 1:
             if st.get("pending_mood") == mood:
                 st["pending_count"] = int(st.get("pending_count", 0)) + 1

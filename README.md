@@ -59,6 +59,9 @@ Code:
 
 - [Claude Code](https://claude.com/claude-code) (`npm install -g
   @anthropic-ai/claude-code`)
+- Python 3 (for the mood-detection hooks). On Windows, install it from
+  [python.org](https://www.python.org/downloads/) or the Microsoft Store —
+  the hooks try `python3` first and fall back to `python`.
 - A Chromium browser — Chrome, Edge, Brave, Arc, Opera or Vivaldi — with the
   **Claude in Chrome** extension installed *in that browser* (for playback
   control). The installer asks which one you want the DJ to use.
