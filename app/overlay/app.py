@@ -24,7 +24,7 @@ from daemon import store
 # scrubber with elapsed/remaining times, then hearts, transport and mood.
 # The expanded height is the sum of those rows plus padding, with a little
 # slack -- shrink it and the notice line clips.
-COLLAPSED = (72, 72)
+COLLAPSED = (95, 95)
 EXPANDED = (368, 210)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
