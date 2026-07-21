@@ -169,6 +169,19 @@ for i in range(5):
 sw, msg = musicdj.decide_switch("research", weight=0.35)
 check("weighted: enough weak signals eventually switch", sw, msg)
 
+# --- entrenchment: a long-held mood must not become unswitchable ---
+# Reinforcing the current mood must not let its score outgrow the threshold,
+# or a long session would lock the DJ into whatever it started on.
+st = musicdj.load_state()
+st.update({"current_mood": "coding", "last_switch": 0, "mood_scores": {}})
+musicdj.save_state(st)
+for _ in range(60):
+    musicdj.decide_switch("coding", weight=1.0)
+sw, msg = musicdj.decide_switch("writing", weight=1.0)
+check("entrenched: 1st rival signal stays pending", not sw, msg)
+sw, msg = musicdj.decide_switch("writing", weight=1.0)
+check("entrenched: long-held mood still yields at threshold", sw, msg)
+
 # disabled
 cfg["enabled"] = False
 musicdj.save_config(cfg)

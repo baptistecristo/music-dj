@@ -261,6 +261,10 @@ WEIGHT_STRONG = 1.0
 WEIGHT_FAILURE = 1.25
 WEIGHT_GLANCE = 0.5
 PROMPT_WEIGHT = 1.5   # the user saying it beats us inferring it
+# How much inertia the mood we're already in gets. Capped at one solid
+# observation: without a ceiling its score climbs for as long as the mood
+# holds, and an hour into a session nothing could ever outscore it.
+STICKINESS_CAP = WEIGHT_STRONG
 
 
 def classify_tool_signal(tool_name, tool_input, tool_response):
@@ -384,8 +388,10 @@ def decide_switch(mood, force=False, weight=1.0):
         scores = _decayed_scores(st, now, half_life)
         if st.get("current_mood") == mood:
             # Reinforce the current mood so competitors must genuinely
-            # dominate it, not just outlast a stale counter.
-            scores[mood] = scores.get(mood, 0.0) + weight
+            # dominate it, not just outlast a stale counter — but cap it, so
+            # two solid observations of something else still win no matter
+            # how long we've been here.
+            scores[mood] = min(scores.get(mood, 0.0) + weight, STICKINESS_CAP)
             st.update({"mood_scores": scores, "last_signal": now})
             save_state(st)
             return False, "already in mood %s" % mood
