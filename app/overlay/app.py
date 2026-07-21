@@ -66,13 +66,18 @@ DWMWA_SYSTEMBACKDROP_TYPE = 38
 DWMWCP_ROUND = 2
 DWMSBT_TRANSIENTWINDOW = 3      # acrylic: the blur used for flyouts
 
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+LWA_ALPHA = 0x00000002
+DEFAULT_ALPHA = 235             # out of 255; low enough to read through
+
 
 class _Margins(ctypes.Structure):
     _fields_ = [("cxLeftWidth", ctypes.c_int), ("cxRightWidth", ctypes.c_int),
                 ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
 
 
-def apply_glass(window):
+def apply_glass(window, alpha=DEFAULT_ALPHA):
     """Frost the window using Windows 11 acrylic.
 
     Needs Windows 11 22H2 or newer; older builds ignore the attribute and you
@@ -111,9 +116,22 @@ def apply_glass(window):
         # The backdrop is only drawn where the frame extends into the client
         # area, and -1 means "the whole thing".
         dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(_Margins(-1, -1, -1, -1)))
-        log.info("acrylic backdrop applied")
+        log.debug("acrylic backdrop requested")
     except Exception:
-        log.debug("could not apply glass", exc_info=True)
+        log.debug("could not request acrylic", exc_info=True)
+
+    # WebView2 paints an opaque surface across the client area, so the acrylic
+    # above usually ends up hidden behind it. Layered-window alpha is applied
+    # by the compositor to the finished window, so it shows through regardless:
+    # translucency without blur, which is the honest ceiling here.
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+        user32.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)
+        log.info("window translucency set (alpha %d/255)", alpha)
+    except Exception:
+        log.info("could not set translucency; the window stays opaque")
 
 
 def saved_position(config):
@@ -162,6 +180,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="music-dj overlay")
     parser.add_argument("--solid", action="store_true",
                         help="opaque window; use if the glass looks wrong")
+    parser.add_argument("--alpha", type=int, default=DEFAULT_ALPHA,
+                        metavar="0-255",
+                        help="window translucency (default %d)" % DEFAULT_ALPHA)
     args = parser.parse_args(argv)
     return _run(args)
 
@@ -204,7 +225,7 @@ def _run(args):
         if args.solid:
             win.evaluate_js("document.body.classList.add('solid')")
             return
-        apply_glass(win)
+        apply_glass(win, max(60, min(255, args.alpha)))
 
     # Runs once the native window exists; the handle does not before that.
     webview.start(on_start, window)

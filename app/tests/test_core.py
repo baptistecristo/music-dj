@@ -320,6 +320,24 @@ async def test_unpinning_hands_control_back_to_state_json():
 
 
 @pytest.mark.asyncio
+async def test_a_vibe_can_be_pinned_directly_not_just_an_activity():
+    # The picker offers the profile's own lanes alongside the hook's activity
+    # moods; pinning one has to select that lane, not fall back to a default.
+    dj = make_dj()
+    await dj.set_mood("loose", pinned=True, force=True)
+    assert dj.lane == "loose"
+    assert dj.queue["lane"] == "loose"
+    terms = [c["term"] for c in dj.tx.sent("search")]
+    assert any("Bon Entendeur" in t or "Gipsy" in t for t in terms)
+
+
+@pytest.mark.asyncio
+async def test_every_offered_vibe_maps_to_a_real_lane():
+    for vibe in ["energized", "focus", "mellow", "loose", "tense"]:
+        assert moods.lane_for(vibe) == vibe
+
+
+@pytest.mark.asyncio
 async def test_the_ui_reports_who_chose_the_mood():
     dj = make_dj()
     assert dj.ui_state()["mood"]["source"] == "claude"

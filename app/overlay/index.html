@@ -288,7 +288,9 @@
     padding: 3px 0;
     box-shadow: 0 8px 20px rgba(0,0,0,.55);
     z-index: 10;
-    min-width: 116px;
+    min-width: 124px;
+    max-height: 210px;
+    overflow-y: auto;
   }
 
   #moods.show { display: block; }
@@ -304,6 +306,16 @@
   }
 
   #moods div:hover { background: var(--chip); color: var(--text); }
+  #moods div.grouphead {
+    color: var(--dim);
+    font-size: 9px;
+    letter-spacing: .14em;
+    padding: 4px 12px 2px;
+    cursor: default;
+  }
+
+  #moods div.grouphead:hover { background: none; color: var(--dim); }
+
   #moods div.sep { border-top: 1px solid var(--hairline); margin-top: 3px; padding-top: 6px; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -348,7 +360,11 @@
 <div id="moods"></div>
 
 <script>
-const MOODS = ["coding", "writing", "debugging", "building", "research"];
+// What the hook infers from your activity...
+const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
+// ...and the seed directions your taste profile is organised by. The daemon
+// takes either, so both are worth offering.
+const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
 const PLAY = "", PAUSE = "";
 
 const el = (id) => document.getElementById(id);
@@ -482,18 +498,27 @@ el("chip").addEventListener("click", (e) => {
   e.stopPropagation();
   const box = el("moods");
   if (!box.innerHTML) {
-    MOODS.forEach((m) => {
-      const d = document.createElement("div");
-      d.textContent = m;
-      d.onclick = (ev) => {
-        ev.stopPropagation();
-        send({action: "setMood", mood: m, pinned: true});
-        box.classList.remove("show");
-      };
-      box.appendChild(d);
-    });
+    const group = (label, moods, first) => {
+      const h = document.createElement("div");
+      h.textContent = label;
+      h.className = "grouphead" + (first ? "" : " sep");
+      box.appendChild(h);
+      moods.forEach((m) => {
+        const d = document.createElement("div");
+        d.textContent = m;
+        d.onclick = (ev) => {
+          ev.stopPropagation();
+          send({action: "setMood", mood: m, pinned: true});
+          box.classList.remove("show");
+        };
+        box.appendChild(d);
+      });
+    };
+    group("Vibe", VIBES, true);
+    group("Activity", ACTIVITY, false);
+
     const unpin = document.createElement("div");
-    unpin.textContent = "Follow my activity";
+    unpin.textContent = "↺ Follow my activity";
     unpin.className = "sep";
     unpin.onclick = (ev) => {
       ev.stopPropagation();
