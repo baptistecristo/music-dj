@@ -1,0 +1,76 @@
+"""Entrypoint.
+
+    python -m daemon.main            # profile picking (milestone 2)
+    python -m daemon.main --verbose
+"""
+
+import argparse
+import asyncio
+import logging
+
+from . import advisor, core, server, store
+
+
+def setup_logging(verbose):
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S")
+    # websockets logs every frame at DEBUG, and the player sends a position
+    # update every second, so --verbose otherwise buries our own lines under
+    # protocol chatter.
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    # websockets logs every frame at DEBUG, and the player sends a position
+    # update every second, so --verbose otherwise buries our own lines under
+    # protocol chatter.
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+
+
+async def run(args):
+    config = store.read_json(store.CONFIG, {})
+    transport = server.BridgeTransport()
+    dj = core.DJ(transport, config=config)
+
+    if not args.no_claude:
+        # Claude picks the batch; the profile stays underneath as the fallback
+        # whenever the CLI is missing, slow, or unhelpful.
+        dj.picks_for = lambda mood, lane: advisor.picks_for(
+            mood, lane, seeds=dj.seeds, rng=dj.rng)
+    transport.on_event = dj.on_event
+
+    srv = server.Server(dj, transport, port=args.port)
+    logging.getLogger("music-dj").info(
+        "mood %s (lane %s); waiting for the extension", dj.mood, dj.lane)
+
+    await asyncio.gather(srv.run(), dj.watch_state(), start_when_ready(dj))
+
+
+async def start_when_ready(dj, poll=3.0):
+    """Begin playing as soon as the extension shows up, not before.
+
+    ensure_playing() does the "is anything already starting?" check itself;
+    testing dj.current here would start a second track over the first while
+    the first was still being confirmed.
+    """
+    while True:
+        if dj.tx.connected:
+            await dj.ensure_playing()
+        await asyncio.sleep(poll)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="music-dj daemon")
+    parser.add_argument("--port", type=int, default=server.PORT)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--no-claude", action="store_true",
+                        help="pick from the taste profile only")
+    args = parser.parse_args()
+    setup_logging(args.verbose)
+    try:
+        asyncio.run(run(args))
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

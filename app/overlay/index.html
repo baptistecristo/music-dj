@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* ------------------------------------------------------------------ tokens
+     Collapsed, this is a record sleeve sitting on the desk: cover only.
+     Hovered, it opens into an Apple Music-shaped mini player -- art and naming
+     on top, a full-width scrubber under it, transport centred below. The
+     why-line is the reason this exists rather than any other now-playing
+     widget, so it keeps its gold rule instead of being dropped for symmetry. */
+
+  :root {
+    --bg: #1b1b1f;
+    --raised: #212128;
+    --text: #f2f2f4;
+    --muted: #9a9aa6;
+    --dim: #62626e;
+    --gold: #f5c451;
+    --chip: #2c2c34;
+    --hairline: #32323c;
+    --green: #57c77f;
+    --amber: #e0a33e;
+
+    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --utility: "Bahnschrift", "Segoe UI", sans-serif;
+    /* Ships with Windows; renders transport marks as crisp vector glyphs
+       rather than the colour emoji the unicode media symbols fall back to. */
+    --icons: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; overflow: hidden;
+    /* Transparent so the window's acrylic backdrop shows through. The
+       .solid class is the fallback when DWM will not frost the window. */
+    background: transparent;
+    color: var(--text);
+    font-family: var(--display);
+    font-size: 12px;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* Dragging is opt-in: pywebview moves the window only when a click lands
+     directly on .pywebview-drag-region, so controls stay clickable simply by
+     not being tagged. */
+
+  #shell {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    /* The window is a fixed height but the why-line is one or two lines and the
+       notice comes and goes, so centre the stack: the slack is shared top and
+       bottom instead of pooling under the controls. */
+    justify-content: center;
+    padding: 11px;
+    border-radius: 10px;
+    /* Glass: tinted enough to keep text legible over a bright desktop, and
+       saturated so album colours behind it stay alive rather than going grey. */
+    background: rgba(22, 22, 27, .52);
+    backdrop-filter: blur(28px) saturate(170%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.09),
+                inset 0 1px 0 rgba(255,255,255,.13);
+  }
+
+  /* Open, the panel is a surface you read from, so it stops being glass:
+     the window alpha dims text as readily as background, and a see-through
+     title over a busy desktop cannot be read at all. */
+  body.open #shell {
+    background: rgba(26, 26, 31, .97);
+    backdrop-filter: none;
+  }
+
+  body.solid #shell {
+    background: var(--bg);
+    backdrop-filter: none;
+  }
+
+  /* Collapsed there is nothing but the cover: no glass, no padding, no edge. */
+  body:not(.open) #shell {
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  /* ------------------------------------------------------------------- cover */
+
+  #head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    flex: 0 0 auto;
+  }
+
+  #cover {
+    position: relative;
+    flex: 0 0 auto;
+    width: 60px; height: 60px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--chip);
+    /* A sleeve edge, not a drop shadow: one inset hairline. */
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.09);
+    transition: width 160ms ease, height 160ms ease, border-radius 160ms ease;
+  }
+
+  /* Collapsed, the cover IS the window: pinned to all four edges so nothing
+     of the shell shows around it, and no ring or rounding on top of the art. */
+  body:not(.open) #shell { display: block; }
+
+  body:not(.open) #cover {
+    position: absolute;
+    inset: 0;
+    width: auto; height: auto;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #art {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  body.disconnected #art { opacity: .4; filter: grayscale(1); }
+
+  /* --------------------------------------------------------------- the panel
+
+     Everything except the cover only exists once the window has grown. */
+
+  .panel {
+    opacity: 0;
+    transform: translateY(-3px);
+    transition: opacity 140ms ease 40ms, transform 180ms ease 40ms;
+    pointer-events: none;
+  }
+
+  body.open .panel { opacity: 1; transform: none; pointer-events: auto; }
+  /* Qualified by #shell so this outranks the id selectors below that set
+     display on individual rows -- otherwise the scrubber and the controls
+     would sit on top of the collapsed album art. */
+  body:not(.open) #shell .panel { display: none; }
+
+  /* -------------------------------------------------------------- the naming */
+
+  #naming { flex: 1 1 auto; min-width: 0; }
+
+  #title {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -.012em;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #sub {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The signature: Claude's stated reason, set as a margin note. Capped at two
+     lines so the window height stays predictable. */
+  #why {
+    margin: 8px 0 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--gold);
+    color: var(--muted);
+    font-size: 11px;
+    font-style: italic;
+    line-height: 1.3;
+    max-height: 29px;
+    overflow: hidden;
+    flex: 0 0 auto;
+  }
+
+  #why:empty { display: none; }
+
+  /* ---------------------------------------------------------- the scrubber */
+
+  #prow {
+    margin-top: 9px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  .clock {
+    flex: 0 0 auto;
+    min-width: 30px;
+    font-family: var(--utility);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .02em;
+    color: var(--dim);
+    line-height: 1;
+  }
+
+  #remain { text-align: right; }
+
+  #progress {
+    flex: 1 1 auto;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,.16);
+    overflow: hidden;
+  }
+
+  #bar {
+    display: block;
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: rgba(255,255,255,.88);
+    transition: width 900ms linear;
+  }
+
+  /* ----------------------------------------------------------------- controls
+
+     Three tracks: stars left, transport dead centre, mood right. The centre
+     column is absolutely centred against the row rather than the leftover
+     space, so the play button does not drift when the mood name changes. */
+
+  #controls {
+    margin-top: 9px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 26px;
+    flex: 0 0 auto;
+  }
+
+
+  #transport {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  #controls button {
+    background: none; border: none; padding: 0;
+    font-family: var(--icons);
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+    transition: color 100ms ease;
+  }
+
+  #controls button:hover { color: var(--text); }
+  #controls button:focus-visible { outline: 1px solid var(--gold); outline-offset: 3px; }
+
+  #playpause { font-size: 19px; color: var(--text); }
+
+  /* Five stars, filled left to right. Hovering previews the rating you would
+     give, so you can see it before you commit to it. */
+  #stars { display: flex; flex-direction: row-reverse; gap: 3px; }
+
+  #stars span {
+    color: var(--dim);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 90ms ease;
+  }
+
+  #stars span.on { color: var(--gold); }
+  #stars:hover span { color: var(--dim); }
+  #stars span:hover, #stars span:hover ~ span { color: var(--gold); }
+
+  #chip {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 5px;
+    background: rgba(255,255,255,.09);
+    border-radius: 3px;
+    padding: 3px 7px;
+    font-family: var(--utility);
+    font-size: 9.5px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    max-width: 96px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  #chip:hover { color: var(--text); }
+
+  #dot {
+    flex: 0 0 auto;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+
+  #chip.pinned #dot { background: var(--amber); }
+
+  #moodname { overflow: hidden; text-overflow: ellipsis; }
+
+  #notice {
+    color: var(--dim);
+    font-family: var(--utility);
+    font-size: 10px;
+    letter-spacing: .04em;
+    padding-top: 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 0 auto;
+  }
+
+  #notice:empty { display: none; }
+
+  /* ------------------------------------------------------------ mood picker */
+
+  /* The chip now sits at the bottom of the panel, so the menu opens upward. */
+  #moods {
+    display: none;
+    position: absolute;
+    right: 11px; bottom: 40px;
+    background: rgba(28, 28, 34, .82);
+    backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 6px;
+    padding: 3px 0;
+    box-shadow: 0 8px 20px rgba(0,0,0,.55);
+    z-index: 10;
+    min-width: 124px;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  #moods.show { display: block; }
+
+  #moods div {
+    padding: 5px 12px;
+    font-family: var(--utility);
+    font-size: 10.5px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  #moods div:hover { background: var(--chip); color: var(--text); }
+  #moods div.grouphead {
+    color: var(--dim);
+    font-size: 9px;
+    letter-spacing: .14em;
+    padding: 4px 12px 2px;
+    cursor: default;
+  }
+
+  #moods div.grouphead:hover { background: none; color: var(--dim); }
+
+  #moods div.sep { border-top: 1px solid var(--hairline); margin-top: 3px; padding-top: 6px; }
+
+  /* -------------------------------------------------------- playlist picker
+
+     First five-star with nowhere to put it: the daemon offers the library's
+     editable playlists and this covers the panel until one is chosen. */
+
+  #setup {
+    display: none;
+    position: absolute;
+    inset: 8px;
+    flex-direction: column;
+    background: rgba(28, 28, 34, .96);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.55);
+    z-index: 20;
+    overflow: hidden;
+  }
+
+  body.open #setup.show { display: flex; }
+
+  #setuphead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px 5px;
+    font-family: var(--utility);
+    font-size: 9px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  #setupclose { cursor: pointer; font-size: 11px; letter-spacing: 0; }
+  #setupclose:hover { color: var(--text); }
+
+  #setuplist { flex: 1 1 auto; overflow-y: auto; padding-bottom: 4px; }
+
+  #setuplist .row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+
+  #setuplist .row:hover { background: var(--chip); }
+
+  #setuplist .name {
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #setuplist .count {
+    flex: 0 0 auto;
+    font-family: var(--utility);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--dim);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="shell" class="pywebview-drag-region">
+
+  <div id="head" class="pywebview-drag-region">
+    <div id="cover" class="pywebview-drag-region">
+      <img id="art" class="pywebview-drag-region"
+           src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+    </div>
+    <div id="naming" class="panel pywebview-drag-region">
+      <div id="title" class="pywebview-drag-region">Nothing playing</div>
+      <div id="sub" class="pywebview-drag-region"></div>
+    </div>
+  </div>
+
+  <div id="why" class="panel pywebview-drag-region"></div>
+
+  <div id="prow" class="panel pywebview-drag-region">
+    <span id="elapsed" class="clock pywebview-drag-region">0:00</span>
+    <div id="progress" class="pywebview-drag-region"><i id="bar"></i></div>
+    <span id="remain" class="clock pywebview-drag-region">-0:00</span>
+  </div>
+
+  <div id="controls" class="panel pywebview-drag-region">
+    <div id="stars"></div>
+    <div id="transport">
+      <button data-act="previous" title="Previous">&#xE892;</button>
+      <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
+      <button data-act="skip" title="Next">&#xE893;</button>
+    </div>
+    <div id="chip"><span id="dot"></span><span id="moodname">&#x2014;</span></div>
+  </div>
+
+  <div id="notice" class="panel pywebview-drag-region"></div>
+</div>
+
+<div id="moods"></div>
+
+<div id="setup">
+  <div id="setuphead"><span>Playlist for five-star tracks</span><span
+       id="setupclose" title="Not now">&#x2715;</span></div>
+  <div id="setuplist"></div>
+</div>
+
+<script>
+// What the hook infers from your activity...
+const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
+// ...and the seed directions your taste profile is organised by. The daemon
+// takes either, so both are worth offering.
+const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
+
+const PLAY = "\uE768", PAUSE = "\uE769";
+
+const el = (id) => document.getElementById(id);
+let state = null;
+let ws = null;
+let socketUp = false;       // is the daemon reachable at all?
+let backoff = 500;
+let closeTimer = null;
+let open = false;
+let setupKey = null;        // what the picker was last built from
+
+// ---------------------------------------------------------------- rendering
+
+// position/duration arrive in milliseconds.
+function clock(ms) {
+  const total = Math.max(0, Math.floor((ms || 0) / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+function render() {
+  const np = state && state.nowPlaying;
+  document.body.classList.toggle("disconnected", !(state && state.connected));
+
+  if (np && np.title) {
+    el("title").textContent = np.title;
+    // Apple's second line is "Artist — Album"; the daemon may not know the
+    // album, in which case the artist stands alone rather than trailing a dash.
+    el("sub").textContent = [np.artist, np.album].filter(Boolean).join(" — ");
+  } else {
+    // An empty state should say what to do, not just report a void.
+    el("title").textContent = !socketUp ? "Daemon not running"
+      : (state && state.connected) ? "Nothing playing" : "No DJ tab open";
+    el("sub").textContent = !socketUp ? "Start it in your terminal"
+      : (state && state.connected) ? "" : "Open music.apple.com";
+  }
+
+  el("art").src = (np && np.artworkUrl) ||
+    "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+  const pos = (np && np.position) || 0;
+  const dur = (np && np.duration) || 0;
+  const pct = dur ? Math.min(100, (pos / dur) * 100) : 0;
+  el("bar").style.width = pct + "%";
+  el("elapsed").textContent = clock(pos);
+  // Apple counts down, not up: what is left of the track, not how long it is.
+  el("remain").textContent = "-" + clock(dur ? Math.max(0, dur - pos) : 0);
+
+  const playing = !!(np && np.playing);
+  el("playpause").textContent = playing ? PAUSE : PLAY;
+  el("playpause").title = playing ? "Pause" : "Play";
+
+  const mood = (state && state.mood) || {};
+  el("moodname").textContent = mood.name || "—";
+  const pinned = mood.source === "pinned";
+  el("chip").classList.toggle("pinned", pinned);
+  el("chip").title = pinned
+    ? "You pinned this mood. Click to change or follow your activity again."
+    : "Following your activity. Click to pin a mood.";
+
+  el("why").textContent = (state && state.why) || "";
+  el("notice").textContent = (state && state.notice) || "";
+
+  // Ratings are per-mood, so the tooltip says which mood: one star while
+  // debugging is not a verdict on the track everywhere.
+  const rating = (state && state.rating) || 0;
+  const when = mood.name ? " while " + mood.name : " in this mood";
+  const stars = el("stars");
+  stars.innerHTML = "";
+  // Built in reverse so the CSS sibling selector can light every star to the
+  // left of the one under the pointer.
+  for (let i = 5; i >= 1; i--) {
+    const star = document.createElement("span");
+    star.textContent = "★";
+    star.className = i <= rating ? "on" : "";
+    star.title = i + (i === 1 ? " star" : " stars") + when;
+    star.onclick = (ev) => {
+      ev.stopPropagation();
+      // Clicking the rating you already have clears it.
+      send({action: "rate", stars: i === rating ? 0 : i});
+    };
+    stars.appendChild(star);
+  }
+
+  renderSetup();
+}
+
+function renderSetup() {
+  const su = state && state.setup;
+  const playlists = (su && su.playlists) || [];
+  el("setup").classList.toggle("show", playlists.length > 0);
+  if (!playlists.length) { setupKey = null; return; }
+
+  // Playback pushes arrive about once a second and each one lands here, so
+  // only rebuild -- and reset the scroll -- when the list itself changes.
+  const key = JSON.stringify(playlists);
+  if (key === setupKey) return;
+  setupKey = key;
+
+  const list = el("setuplist");
+  list.innerHTML = "";
+  playlists.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = p.name;
+    name.title = p.name;
+    row.appendChild(name);
+    if (p.trackCount != null) {
+      const count = document.createElement("span");
+      count.className = "count";
+      count.textContent = p.trackCount;
+      row.appendChild(count);
+    }
+    row.onclick = (ev) => {
+      ev.stopPropagation();
+      send({action: "chooseStarred", id: p.id, name: p.name});
+    };
+    list.appendChild(row);
+  });
+}
+
+// ------------------------------------------------------------------ socket
+
+function connect() {
+  try {
+    ws = new WebSocket("ws://127.0.0.1:8787/ui");
+  } catch (e) {
+    return setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
+  }
+  ws.onopen = () => { backoff = 500; socketUp = true; render(); };
+  ws.onmessage = (ev) => {
+    try { state = JSON.parse(ev.data); render(); } catch (e) {}
+  };
+  ws.onclose = () => {
+    socketUp = false;
+    if (state) state.connected = false;
+    render();
+    setTimeout(connect, backoff = Math.min(backoff * 2, 10000));
+  };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+
+function send(msg) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// ---------------------------------------------------------------- expansion
+
+// CSS cannot grow a frameless OS window, so the resize and the reveal are
+// driven together: window first so there is room, then the content fades in.
+function expand() {
+  clearTimeout(closeTimer);
+  if (open) return;
+  open = true;
+  if (window.pywebview) pywebview.api.expand();
+  document.body.classList.add("open");
+}
+
+function collapse() {
+  clearTimeout(closeTimer);
+  // Short delay so the panel does not snap shut when the pointer crosses the
+  // gap between the cover and the controls.
+  closeTimer = setTimeout(() => {
+    open = false;
+    el("moods").classList.remove("show");
+    document.body.classList.remove("open");
+    if (window.pywebview) pywebview.api.collapse();
+  }, 250);
+}
+
+document.body.addEventListener("mouseenter", expand);
+document.body.addEventListener("mouseleave", collapse);
+
+// ------------------------------------------------------------------ actions
+
+el("transport").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  e.stopPropagation();
+  const act = btn.dataset.act;
+  if (act === "playpause") {
+    const playing = !!(state && state.nowPlaying && state.nowPlaying.playing);
+    send({action: playing ? "pause" : "resume"});
+  } else {
+    send({action: act});
+  }
+});
+
+el("chip").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const box = el("moods");
+  if (!box.innerHTML) {
+    const group = (label, moods, first) => {
+      const h = document.createElement("div");
+      h.textContent = label;
+      h.className = "grouphead" + (first ? "" : " sep");
+      box.appendChild(h);
+      moods.forEach((m) => {
+        const d = document.createElement("div");
+        d.textContent = m;
+        d.onclick = (ev) => {
+          ev.stopPropagation();
+          send({action: "setMood", mood: m, pinned: true});
+          box.classList.remove("show");
+        };
+        box.appendChild(d);
+      });
+    };
+    group("Vibe", VIBES, true);
+    group("Activity", ACTIVITY, false);
+
+    const unpin = document.createElement("div");
+    unpin.textContent = "↺ Follow my activity";
+    unpin.className = "sep";
+    unpin.onclick = (ev) => {
+      ev.stopPropagation();
+      send({action: "unpin"});
+      box.classList.remove("show");
+    };
+    box.appendChild(unpin);
+  }
+  box.classList.toggle("show");
+});
+
+document.addEventListener("click", () => el("moods").classList.remove("show"));
+
+el("setupclose").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  send({action: "dismissSetup"});
+});
+
+render();
+connect();
+</script>
+</body>
+</html>

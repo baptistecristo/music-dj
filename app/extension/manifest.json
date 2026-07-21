@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "music-dj-bridge",
+  "version": "0.1.0",
+  "description": "Bridges the local music-dj daemon to the Apple Music web player.",
+  "permissions": ["alarms", "storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://music.apple.com/*",
+    "https://amp-api.music.apple.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["bridge-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://music.apple.com/*"],
+      "js": ["bridge-iso.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}
