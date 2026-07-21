@@ -90,9 +90,10 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
-# Idle it sits back and lets the desktop through; under the pointer it firms
-# up so the text is readable while you are actually looking at it.
-ACTIVE_ALPHA = 235
+# Layered alpha dims everything, text included, so the open panel is fully
+# opaque -- a see-through title over a busy desktop is unreadable. Collapsed
+# there is nothing but album art, which is exactly where translucency belongs.
+ACTIVE_ALPHA = 255
 IDLE_ALPHA = 140
 
 _hwnd = None                    # found once, reused for every alpha change

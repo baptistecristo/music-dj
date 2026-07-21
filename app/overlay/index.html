@@ -66,6 +66,14 @@
                 inset 0 1px 0 rgba(255,255,255,.13);
   }
 
+  /* Open, the panel is a surface you read from, so it stops being glass:
+     the window alpha dims text as readily as background, and a see-through
+     title over a busy desktop cannot be read at all. */
+  body.open #shell {
+    background: rgba(26, 26, 31, .97);
+    backdrop-filter: none;
+  }
+
   body.solid #shell {
     background: var(--bg);
     backdrop-filter: none;
