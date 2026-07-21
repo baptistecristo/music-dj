@@ -83,6 +83,8 @@ TOOLS = [
                 "enabled": {"type": "boolean"},
                 "shuffle": {"type": "boolean"},
                 "min_seconds_between_switches": {"type": "integer"},
+                "confirmations_needed": {"type": "integer", "description": "Consecutive observations of a new mood before switching (urgent moods need only 1)"},
+                "urgent_moods": {"type": "array", "items": {"type": "string", "enum": musicdj.MOODS}, "description": "Moods that switch fast (single observation, half the debounce window). Default: [\"debugging\"]"},
                 "pause_on_session_end": {"type": "boolean"},
                 "session_start_mood": {"type": "string"},
                 "launch_music_if_closed": {"type": "boolean"}
@@ -124,6 +126,7 @@ def call_tool(name, args):
         if args.get("mood") and args.get("playlist"):
             cfg["playlists"][args["mood"]] = args["playlist"]
         for key in ("service", "enabled", "shuffle", "min_seconds_between_switches",
+                    "confirmations_needed", "urgent_moods",
                     "pause_on_session_end", "session_start_mood",
                     "launch_music_if_closed"):
             if key in args:
@@ -144,6 +147,14 @@ def reply(msg_id, result=None, error=None):
 
 
 def main():
+    # JSON-RPC over stdio is UTF-8. On Windows, Python defaults pipes to the
+    # legacy locale codepage, which corrupts accented playlist/track names in
+    # both directions — force UTF-8 (and tolerate a BOM on input).
+    try:
+        sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

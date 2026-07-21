@@ -9,7 +9,7 @@ description: >
   "[music-dj]" marker appears in hook context, or proactively at the start of
   a long working session if the user has used the DJ before.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # Music DJ
@@ -75,7 +75,8 @@ Re-run the scan whenever the user asks to refresh their taste profile.
 ## Reading the user's mood from their writing
 
 Judge from the last few user messages (tone, rhythm, content — not just the
-task type):
+task type). Judge in whatever language the user writes; the signals below
+are language-independent.
 
 | Signal in the user's writing | Mood | Musical direction |
 |---|---|---|
@@ -84,21 +85,54 @@ task type):
 | Focused technical back-and-forth, precise asks | locked in | instrumental / low-vocal picks from the profile |
 | Reflective, long-form, writing prose or docs | mellow | soft, acoustic, songwriterly |
 | Casual chat, jokes, winding down, late night | loose | eclectic feel-good favorites |
+| Something just worked after a struggle ("finally!", tests green, shipped) | celebrating | ONE clearly upbeat favorite, then settle back down |
 
-Combine with activity when hooks provide it (`[music-dj]` markers name a
-mood: coding / writing / debugging / building / research). Map those to
-directions using the taste profile.
+Second-order signals, all softeners (they lower energy, never raise it):
 
-## DJ etiquette
+- **Trajectory beats snapshot.** Messages getting shorter, terser, more
+  typo-ridden over several turns = rising stress or fatigue → drift calmer
+  *before* they say anything. Don't mirror one grumpy message; react to the
+  trend.
+- **Escalating frustration** (same bug for 30+ min, repeated "still broken")
+  → go progressively softer and strip vocals; never respond to anger with
+  energy.
+- **Clock and cadence.** Late night → lower energy ceiling regardless of
+  mood; first session of the morning → start one notch gentler and ramp up.
+- Combine with activity when hooks provide it (`[music-dj]` markers name a
+  mood: coding / writing / debugging / building / research). The user's own
+  words outrank the marker when they disagree.
 
-- Switch music at real transitions only; never mid-song unless asked.
-  Leave at least ~10–15 minutes between unprompted switches.
+## Picking the next song
+
+- Seed from the taste profile's "mood → seed directions", but vary the seed
+  every time — never the same seed twice in a row.
+- **Energy continuity:** move at most one energy step per transition (the
+  celebration one-shot is the only exception). A jarring jump feels like a
+  different DJ walked in.
+- Keep tempo and texture adjacent to what's playing when you hand over:
+  leaving a soft acoustic track for pounding electro is a fail even if both
+  fit the mood on paper.
+- **Discovery ratio:** roughly 1 in 3 picks should be something the profile
+  suggests they'd love but haven't played recently; the rest familiar-adjacent.
+  If the user skips a discovery pick, note it in the taste profile's Don'ts.
+- Don't repeat an artist within ~90 minutes, and track what you've played
+  this session so nothing repeats.
+- Respect the profile's Don'ts absolutely — they encode explicit corrections.
+
+## Timing & etiquette
+
+- Switch at real transitions only — ideally at a track boundary: check the
+  player's remaining time (status snippet) and let the current song finish
+  when the mood shift isn't urgent. Exception: rising frustration — bring
+  the calm now, not in 3 minutes.
+- Leave at least ~10–15 minutes between unprompted switches; a mood must
+  show up in at least two signals before an unprompted switch (one clear
+  breakage is enough for the calm-down).
 - One short line when switching ("Tests are failing — putting on something
-  calmer"), never a paragraph.
+  calmer"), never a paragraph. Silence is fine too.
 - Explicit requests always win over inference. "Skip", "pause", "play X" →
-  do exactly that, immediately.
-- Prefer fresh picks consistent with the profile over repeating the user's
-  recent plays — the DJ should feel like discovery within their taste.
+  do exactly that, immediately. A skip is also feedback — record what was
+  skipped and in which mood.
 - When a `[music-dj]` hook marker fires but the DJ tab isn't set up or the
   user never asked for music this session, ignore it silently.
 - If playback won't start, don't loop retrying — check the service

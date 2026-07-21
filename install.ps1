@@ -67,6 +67,25 @@ if ($claudeOk) {
     Write-Host "         Install it first:  npm install -g @anthropic-ai/claude-code"
     Write-Host "         (needs Node.js: https://nodejs.org)"
 }
+# The hooks/MCP server run "python3", with a fallback to "python". On Windows,
+# "python3" is often the Microsoft Store alias stub (python.org installs only
+# provide python.exe), which fails silently — so verify a real Python answers.
+$py3Ok = $false
+try { $v = & python3 --version 2>$null; $py3Ok = ($LASTEXITCODE -eq 0 -and "$v" -match "^Python 3") } catch {}
+$pyOk = $false
+if (-not $py3Ok) {
+    try { $v = & python --version 2>$null; $pyOk = ($LASTEXITCODE -eq 0 -and "$v" -match "^Python 3") } catch {}
+}
+if ($py3Ok) {
+    Write-Host "    [ok] Python 3 found (python3)"
+} elseif ($pyOk) {
+    Write-Host "    [ok] Python 3 found (python) - the DJ's hooks will use it automatically"
+} else {
+    Write-Host "    [!!] Python 3 not found (or 'python3' is the Microsoft Store stub)." -ForegroundColor Yellow
+    Write-Host "         The mood-detection hooks need it. Install Python 3 from"
+    Write-Host "         https://www.python.org/downloads/ (check 'Add python.exe to PATH')"
+    Write-Host "         or from the Microsoft Store, then re-run this installer."
+}
 Write-Host "    [--] Chrome + the 'Claude in Chrome' extension are needed for playback control."
 Write-Host "         Get it from the Chrome Web Store, sign in with your Claude account."
 

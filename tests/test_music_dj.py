@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugins", "music-dj")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
@@ -49,12 +50,31 @@ check("bash traceback -> debugging",
 check("bash ls -> None", c("Bash", {"command": "ls -la"}, {"stdout": "files"}) is None)
 check("bash git push -> building",
       c("Bash", {"command": "git push origin main"}, {"stdout": "done"}) == "building")
+check("bash bun test fail -> debugging",
+      c("Bash", {"command": "bun test"}, {"stdout": "3 failing"}) == "debugging")
+check("bash npm error -> debugging",
+      c("Bash", {"command": "npm run build"}, {"stderr": "npm error ELIFECYCLE"}) == "debugging")
+check("bash cargo panic -> debugging",
+      c("Bash", {"command": "cargo test"}, {"stderr": "thread 'main' panicked at src/lib.rs"}) == "debugging")
+check("read code -> None (no false research)", c("Read", {"file_path": "src/app.ts"}, None) is None)
+check("read docs -> research", c("Read", {"file_path": "notes/design.md"}, None) == "research")
+check("grep -> None", c("Grep", {"pattern": "foo"}, None) is None)
+check("agent tool -> research", c("Agent", {}, None) == "research")
 
 p = musicdj.classify_prompt
 check("prompt bug -> debugging", p("there's a bug in the login flow") == "debugging")
 check("prompt blog -> writing", p("draft a blog post about rust") == "writing")
 check("prompt research -> research", p("research the best sqlite orm") == "research")
 check("prompt neutral -> None", p("hello") is None)
+check("prompt fr plante -> debugging", p("l'app plante au démarrage") == "debugging")
+check("prompt fr marche pas -> debugging", p("le login ne marche pas") == "debugging")
+check("prompt fr corrige -> debugging", p("corrige l'erreur d'import") == "debugging")
+check("prompt fr rédige -> writing", p("rédige un rapport pour l'équipe") == "writing")
+check("prompt deploy -> building", p("deploy the new version to prod") == "building")
+check("prompt fr déploie -> building", p("déploie ça en prod") == "building")
+check("prompt implement -> coding", p("implement the retry logic") == "coding")
+check("prompt fr ajoute -> coding", p("ajoute un bouton de partage") == "coding")
+check("prompt 'write a test' not writing", p("write a test for the parser") != "writing")
 
 # --- debounce / sticky switching (mock playback) ---
 played = []
@@ -75,11 +95,28 @@ check("debounce blocks fast switch", not sw and len(played) == 1, msg)
 st = musicdj.load_state()
 st["last_switch"] = 0
 musicdj.save_state(st)
+# debugging is urgent by default: one observation is enough
 sw, msg = musicdj.maybe_switch("debugging")
-check("1st confirmation pending", not sw and "pending" in msg, msg)
-sw, msg = musicdj.maybe_switch("debugging")
-check("2nd confirmation switches", sw and played[-1] == "Calm", msg)
+check("urgent mood switches on 1st observation", sw and played[-1] == "Calm", msg)
 check("state updated", musicdj.load_state()["current_mood"] == "debugging")
+
+# non-urgent moods still need two confirmations
+st = musicdj.load_state()
+st["last_switch"] = 0
+musicdj.save_state(st)
+sw, msg = musicdj.maybe_switch("writing")
+check("1st confirmation pending", not sw and "pending" in msg, msg)
+sw, msg = musicdj.maybe_switch("writing")
+check("2nd confirmation switches", sw and played[-1] == "Mellow", msg)
+
+# urgent mood gets half the debounce window
+st = musicdj.load_state()
+st["last_switch"] = time.time() - 200   # 200s ago: > 150 (urgent), < 300 (normal)
+musicdj.save_state(st)
+sw, msg = musicdj.maybe_switch("coding")
+check("normal mood still debounced at 200s", not sw, msg)
+sw, msg = musicdj.maybe_switch("debugging")
+check("urgent mood allowed at 200s", sw and played[-1] == "Calm", msg)
 
 sw, msg = musicdj.maybe_switch("nonsense")
 check("unknown mood rejected", not sw)
@@ -88,7 +125,7 @@ check("unknown mood rejected", not sw)
 cfg["enabled"] = False
 musicdj.save_config(cfg)
 sw, msg = musicdj.maybe_switch("coding", force=True)
-check("disabled blocks", not sw and len(played) == 2, msg)
+check("disabled blocks", not sw and len(played) == 4, msg)
 cfg["enabled"] = True
 musicdj.save_config(cfg)
 
@@ -98,6 +135,20 @@ r = subprocess.run(
     input=json.dumps({"tool_name": "Edit", "tool_input": {"file_path": "x.py"}}),
     capture_output=True, text=True, timeout=15, env=dict(os.environ))
 check("hook exits 0, silent", r.returncode == 0 and r.stdout == "", r.stderr[:200])
+
+# BOM-prefixed UTF-8 stdin with an accented French prompt (what Windows pipes
+# can deliver) must still parse, classify, and emit the mood marker.
+musicdj.save_state({"last_switch": 0})
+r = subprocess.run(
+    [sys.executable, os.path.join(ROOT, "hooks", "scripts", "dj_hook.py"), "prompt"],
+    input="﻿" + json.dumps({"prompt": "corrige le bug, ça échoue encore"},
+                                ensure_ascii=False),
+    capture_output=True, text=True, encoding="utf-8", timeout=15,
+    env=dict(os.environ))
+check("hook survives BOM + accents, emits marker",
+      r.returncode == 0 and "debugging" in r.stdout
+      and "additionalContext" in r.stdout,
+      (r.stdout + r.stderr)[:200])
 
 # --- MCP server handshake ---
 msgs = [
@@ -138,6 +189,9 @@ check("mcp: now_playing graceful off-mac", "macOS" in np["content"][0]["text"], 
 hj = json.load(open(os.path.join(ROOT, "hooks", "hooks.json")))
 check("hooks.json has top-level hooks record", isinstance(hj.get("hooks"), dict))
 check("hooks.json events present", {"PostToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd"} <= set(hj["hooks"]))
+cmds = [h["command"] for ev in hj["hooks"].values() for m in ev for h in m["hooks"]]
+check("hooks fall back to 'python' for Windows",
+      all("python3" in c and "|| python " in c for c in cmds), cmds)
 
 print()
 if failures:

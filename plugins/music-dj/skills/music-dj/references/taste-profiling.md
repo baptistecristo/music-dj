@@ -28,26 +28,36 @@ plays. Refresh by asking the DJ to "refresh my taste profile".
 
 ## The shape of the library
 
-- [Genre/scene shelf 1 — biggest first, with representative artists]
+- [Genre/scene shelf 1 — biggest first, with representative artists and an
+  energy tag: low / mid / high]
 - [Shelf 2 ...]
 - [Recent listening tendencies]
 - Summary line: [overall character — languages, eras, energy, what's absent]
 
 ## Mood → seed directions
 
-Pick ONE seed song per switch (vary seeds; never the same twice in a row):
+Pick ONE seed song per switch (vary seeds; never the same twice in a row).
+Ordered low → high energy so transitions can move one step at a time:
 
-- **energized / shipping something** → [artists/songs]
-- **tense / debugging / frustrated** → [calm warm picks]
-- **locked in / deep focus** → [instrumental-leaning picks]
+- **tense / debugging / frustrated** → [calm warm picks — low energy]
 - **mellow / writing / reflective** → [soft picks]
-- **loose / late night / celebrating** → [feel-good picks]
+- **locked in / deep focus** → [instrumental-leaning picks]
+- **loose / late night** → [feel-good picks]
+- **energized / shipping / celebrating** → [high-energy picks]
 
 ## Don'ts
 
 - [Genres/moods to avoid, and when]
 - Don't over-play the user's recent-plays list — discovery within taste,
   not a mirror.
+
+## Feedback log
+
+Append a line whenever the user skips a pick or corrects the DJ, so the
+next session learns from it:
+
+- [date] skipped [song — artist] while [mood]
+- [date] "[correction in the user's words]"
 ```
 
 ## Rules
