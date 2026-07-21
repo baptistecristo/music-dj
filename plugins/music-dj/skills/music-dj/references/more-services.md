@@ -1,6 +1,6 @@
 # Other services — web player control notes
 
-All follow the same browser-mode pattern as the four majors: one Chrome tab
+All follow the same browser-mode pattern as the four majors: one browser tab
 kept as "DJ" (title-observer snippet in `apple-music.md`), user signs in
 themselves, one real click unlocks audio, seed a song/station matching mood +
 taste profile, prefer the service's radio/autoplay feature so similar songs

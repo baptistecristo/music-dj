@@ -22,6 +22,14 @@ DEFAULT_CONFIG = {
     # Music service: apple-music | spotify | soundcloud | youtube-music |
     # deezer | tidal | amazon-music | qobuz | bandcamp | pandora
     "service": "apple-music",
+    # Which browser the web player is driven in: chrome | edge | brave |
+    # arc | opera | vivaldi | "" (ask each time). This is a preference, not a
+    # guarantee — the DJ can only use a browser that has the Claude extension
+    # installed and connected.
+    "browser": "",
+    # deviceId of the browser picked last time, so later sessions can reselect
+    # it without asking again. Cleared by changing "browser".
+    "browser_device_id": "",
     "shuffle": True,
     # Don't switch playlists more often than this (seconds).
     "min_seconds_between_switches": 120,

@@ -80,6 +80,8 @@ TOOLS = [
                 "mood": {"type": "string", "enum": musicdj.MOODS},
                 "playlist": {"type": "string", "description": "Playlist name to assign to the mood"},
                 "service": {"type": "string", "description": "Music service id (apple-music, spotify, soundcloud, youtube-music, deezer, tidal, amazon-music, qobuz, bandcamp, pandora)"},
+                "browser": {"type": "string", "description": "Preferred browser for the web player (chrome, edge, brave, arc, opera, vivaldi). Empty string means ask each time."},
+                "browser_device_id": {"type": "string", "description": "deviceId of the chosen browser, from list_connected_browsers"},
                 "enabled": {"type": "boolean"},
                 "shuffle": {"type": "boolean"},
                 "min_seconds_between_switches": {"type": "integer"},
@@ -123,7 +125,13 @@ def call_tool(name, args):
         cfg = musicdj.load_config()
         if args.get("mood") and args.get("playlist"):
             cfg["playlists"][args["mood"]] = args["playlist"]
-        for key in ("service", "enabled", "shuffle", "min_seconds_between_switches",
+        # Switching browsers invalidates the remembered deviceId — it points at
+        # the old browser. Drop it unless this same call supplies a new one.
+        if ("browser" in args and args["browser"] != cfg.get("browser")
+                and "browser_device_id" not in args):
+            cfg["browser_device_id"] = ""
+        for key in ("service", "browser", "browser_device_id", "enabled", "shuffle",
+                    "min_seconds_between_switches",
                     "pause_on_session_end", "session_start_mood",
                     "launch_music_if_closed"):
             if key in args:
