@@ -129,6 +129,13 @@
     await mk.setQueue({ song: String(catalogId) });
     kick();
     await sleep(3000);
+
+    // Keep watching for a few more seconds rather than judging at a fixed 3s,
+    // or a track that is merely slow gets reported as blocked.
+    for (let i = 0; i < 12 && mk.playbackState !== S_PLAYING; i++) {
+      await sleep(500);
+    }
+
     // Stuck at "loading" with the playhead at zero is Chrome's autoplay policy
     // refusing us, not a slow network. It needs one real user click in the tab.
     if (mk.playbackState === S_LOADING && (mk.currentPlaybackTime || 0) === 0) {

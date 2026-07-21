@@ -264,6 +264,17 @@ class DJ:
             self.push()
             return None
 
+        # State 2 is "playing". Anything else means the command was accepted
+        # but no audio came out — the failure that looks like success, and the
+        # one worth naming in the log rather than leaving you to wonder.
+        state = reply.get("state")
+        if state == 2:
+            log.info("playing %s — %s", track.get("title"), track.get("artist"))
+        else:
+            log.warning("%s was accepted but did not start (state %s). State 1 "
+                        "means the browser is holding audio: click play once in "
+                        "the DJ tab.", track.get("title"), state)
+
         self.current = track
         self.history = library.remember_play(self.history, track, self.now())
         store.write_json(store.HISTORY, self.history)
