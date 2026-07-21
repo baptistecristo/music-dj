@@ -3,101 +3,69 @@
 An always-on-top DJ for Windows that plays Apple Music matched to your working
 mood, independent of any Claude session.
 
-Built alongside the `music-dj` Claude Code plugin, not replacing it. The plugin's
-hook keeps classifying activity into `state.json`; this app reads that and plays
-the music.
+Built alongside the `music-dj` Claude Code plugin, not replacing it. The
+plugin's hook keeps classifying activity into `~/.music-dj/state.json`; this
+app reads that file and plays the music.
 
 ```
-extension/   Chrome extension -- the hands, inside music.apple.com
-daemon/      Python -- the brain: mood, queue, history, ratings
-overlay/     pywebview strip                              (milestone 3, not built)
+extension/   Chrome/Edge extension -- the hands, inside music.apple.com
+daemon/      Python -- the brain: mood, queue, history, ratings, Claude picking
+overlay/     pywebview mini player
 tools/       throwaway CLI driver + transport smoke test
-tests/       98 tests, browser mocked
+tests/       161 tests, browser mocked
 ```
 
-## Status
+## Running it
 
-| Milestone | State |
-|---|---|
-| 1. Extension + CLI driver | **verified against the live player** |
-| 2. Daemon, profile picking | plays and advances tracks live; reload recovery still unproven |
-| 3. Overlay | renders and shows live state; drag, hover and rating still unchecked |
-| 4. Setup, Claude picking, ratings | ratings + starred-playlist logic written and tested; setup UI and Claude picking not started |
+Three things, in this order.
 
-Milestone 1 was checked by hand on Windows/Edge: list playlists, search, play
-(real audio), pause, resume, skip, create a playlist, and add a track to it.
+**1. The extension**, once. `edge://extensions` (or `chrome://extensions`) →
+Developer mode → **Load unpacked** → pick `app/extension`. Then open
+<https://music.apple.com> and sign in; the tab title becomes **DJ**.
 
-Two things that cost time and are now handled: content scripts do not reach a
-tab that was already open when you loaded the extension (the worker injects on
-demand instead), and Chrome refuses audio until the tab has had one real click.
+Allow autoplay for the site, or playback stops between tracks: click the icon
+left of the address bar → **Permissions for this site** → **Media autoplay** →
+**Allow**.
 
-## Verifying milestone 1
-
-Loading an unpacked extension goes through a native file-picker dialog, which no
-automation can drive. So this part is yours:
-
-1. Open `chrome://extensions` (Edge: `edge://extensions`).
-2. Turn on **Developer mode**.
-3. **Load unpacked** → pick the `app/extension` folder in this repo.
-4. Open <https://music.apple.com> and sign in. The tab title should become **DJ**.
-5. In a terminal:
-
-   ```
-   cd app
-   python tools/cli_driver.py
-   ```
-
-   It should print `== extension connected` within a few seconds.
-
-Then work through these, in order:
+**2. The daemon.**
 
 ```
-playlists                    # expect ~48 total, editable ones listed
-search Folamour The Journey  # expect a catalog id back
-play <catalogId>             # expect audio. If not, see below.
-pause                        # audio stops
-resume                       # audio resumes
-skip
-create dj-scratch            # a throwaway playlist -- never test against 🦅
-add <playlistId> <catalogId> # verify in the web player it landed
-```
-
-Your starred target is likely an existing, well-used playlist with hundreds of
-tracks in it. Nothing here writes to it until you pick it during first-run
-setup, and the star path checks membership before adding, so re-starring a
-track cannot duplicate it. Test adds against a throwaway playlist.
-
-**If `play` produces no audio:** click play once manually in the DJ tab. Chrome
-refuses audio in a tab that has never had a real user click. The driver prints an
-`autoplayBlocked` event when it detects this.
-
-**If everything comes back preview-only:** the web player sees no active
-subscription -- check which Apple ID is signed in.
-
-## Running the daemon (milestone 2)
-
-```
+cd app
 python -m daemon.main --verbose
 ```
 
-Serves `ws://127.0.0.1:8787` on two paths: `/bridge` (extension) and `/ui`
-(overlay). It watches `~/.music-dj/state.json` for mood changes, builds a queue,
-and advances it on `trackEnded`.
-
-Picks currently come from `taste-profile.md` only. Claude picking is milestone 4;
-this profile path stays as the mandatory fallback underneath it.
-
-## Tests
+**3. The overlay**, in a second terminal.
 
 ```
-python -m pytest tests/ -q      # 98 passing
-python tools/transport_smoke.py # transport, with a mock extension
+cd app
+pythonw -m overlay.app        # no console window
+python -m overlay.app         # with logs, when something is wrong
 ```
 
-The tests mock the extension transport, so they prove the daemon's logic --
-mood mapping, queue advance, history dedupe, per-mood ratings, the
-no-duplicate-star rule, and every fallback path. They prove nothing about
-MusicKit actually playing; only step 5 above does that.
+Useful flags: `--no-claude` picks from the profile only; `--solid` and
+`--idle-alpha N` control the overlay's translucency.
+
+## What it does
+
+The daemon watches `state.json` for mood changes, asks Claude for a batch of
+twelve tracks, resolves each to a catalog id through the extension, and
+advances the queue when a track ends. Apple's own autoplay is never used --
+curating is the point.
+
+**Picks come from Claude**, prompted with your taste profile, the current mood,
+recent plays, and the tracks you rated 5 and 1 star *in that mood*. Each pick
+carries the reason Claude gave, and the overlay shows it verbatim. The taste
+profile is the floor underneath: a missing CLI, a timeout or an unparseable
+answer all fall through to it, so the music never stops because the model was
+unhelpful.
+
+**The overlay** is a 95px album cover, translucent, always on top and absent
+from the taskbar. Hover it and it opens into a mini player: title, artist, the
+why-line, a scrubber, transport, five stars and the mood chip.
+
+**Ratings are per mood.** One star while debugging says nothing about a Friday
+night. Five stars adds the track to a playlist you choose during setup, and
+checks membership first so re-rating cannot duplicate.
 
 ## Two vocabularies, on purpose
 
@@ -113,6 +81,63 @@ focus / mellow / loose`. `daemon/moods.py` maps between them:
 | research | focus |
 | writing | mellow |
 
-Keeping both means the hook stays untouched and the profile stays the single
-source of musical truth. `research → focus` is a judgement call: reading docs
-wants the same low-vocal register as coding.
+The overlay's mood chip offers both, so you can ask for a feel rather than
+describe what you are doing. `research → focus` is a judgement call: reading
+docs wants the same low-vocal register as coding.
+
+## Tests
+
+```
+python -m pytest tests/ -q      # 161 passing
+python tools/transport_smoke.py # transport, with a mock extension
+```
+
+They mock the extension, so they prove the daemon's logic -- mood mapping,
+queue advance, history dedupe, per-mood ratings, the no-duplicate-star rule,
+Claude's prompt contents, and every fallback path. They prove nothing about
+MusicKit actually playing.
+
+## State of it
+
+| Milestone | State |
+|---|---|
+| 1. Extension + CLI driver | verified against the live player |
+| 2. Daemon, profile picking | plays and advances tracks live |
+| 3. Overlay | renders live state; drag and rating unchecked |
+| 4. Setup, Claude picking, ratings | Claude picking verified live; **first-run setup not built** |
+
+Known gaps, roughly by how much they matter:
+
+- **First-run setup does not exist.** Nothing writes `starred_playlist` into
+  `config.json`, so five stars stores the rating and then reports that no
+  playlist is configured. Add it by hand to wire up the rest:
+  `{"starred_playlist": {"id": "p.xxxx", "name": "..."}}`
+- **Reload recovery is unproven live.** The code is written and tested against
+  mocks; both live attempts were killed by autoplay blocking before it ran.
+- **Never run 30 minutes unattended.**
+- **Drag and remembered position are unverified.** The drag mechanism was
+  configured but untagged for a while, so it did nothing at all.
+- `trackCount` on library playlists may come back empty; the setup picker
+  wants it. `previewOnly` detection has never fired, since the subscription is
+  active.
+
+Limitations rather than bugs: there is no frosted blur (WebView2 paints over
+the acrylic, so uniform alpha is the ceiling), the alpha snaps rather than
+fades, and a Claude batch takes ~17s (nothing waits on it -- the queue refills
+mid-track).
+
+## Things that cost real time
+
+- Content scripts do not reach a tab that was already open when the extension
+  loaded. The worker injects on demand instead.
+- Chrome and Edge refuse audio until the tab has had a real click, and Edge's
+  "Limit" autoplay default re-blocks it.
+- `claude` on Windows is a `.CMD`, so it runs through `cmd.exe`, which cuts a
+  multi-line argument at the first newline. The prompt goes over stdin.
+- pywebview's `resize()` is clamped by WinForms' minimum width: ask for 72 and
+  you get 232. `SetWindowPos` is not.
+- Two top-level windows carry the overlay's title, and `FindWindowW` returns
+  the hidden one during startup.
+- The overlay is a browser too, so the daemon's origin guard has to let
+  loopback through -- matched on the parsed hostname, since
+  `127.0.0.1.example.com` is a registrable domain.
