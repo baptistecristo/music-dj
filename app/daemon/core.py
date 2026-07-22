@@ -59,6 +59,8 @@ class DJ:
         # arriving next to a trackEnded runs two of them at once and the queue
         # advances twice -- you hear one track while the log names another.
         self._play_lock = asyncio.Lock()
+        # Set by the shutdown event from the extension; main() exits on it.
+        self.shutdown_event = asyncio.Event()
 
     # ------------------------------------------------------------- plumbing
 
@@ -359,8 +361,29 @@ class DJ:
 
     # --------------------------------------------------------------- events
 
+    async def shutdown(self):
+        """The toolbar icon was clicked while we were running.
+
+        Stop the sound first, then tell the overlay to close, then let
+        main() exit. Each step is best-effort: a dead tab or a closed
+        overlay must not keep the process alive.
+        """
+        log.info("shutdown requested by the extension")
+        if self.playing:
+            await self.tx.call({"cmd": "pause"}, timeout=5)
+        for fn in list(self.listeners):
+            try:
+                fn({"shutdown": True})
+            except Exception:
+                log.debug("ui listener failed", exc_info=True)
+        self.shutdown_event.set()
+
     async def on_event(self, evt):
         kind = evt.get("evt")
+
+        if kind == "shutdown":
+            await self.shutdown()
+            return
 
         if kind == "trackEnded":
             # Cutting in mid-song makes the player report the interrupted track
