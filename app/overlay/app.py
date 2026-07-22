@@ -62,6 +62,14 @@ class Api:
                 win.resize(*COLLAPSED)
         fade_alpha(IDLE_ALPHA)
 
+    # The page owns the when (it is the one watching playback state); Python
+    # owns the how, because a web page cannot fade an OS window.
+    def vanish(self):
+        vanish()
+
+    def reappear(self):
+        reappear()
+
 
 # --------------------------------------------------------------------- glass
 
@@ -81,6 +89,10 @@ WS_EX_LAYERED = 0x00080000
 # that just sits on top all day.
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
+# Mouse input falls straight through to whatever is underneath. Paired with
+# zero alpha this is how the overlay leaves the screen: an invisible window
+# that still swallowed hovers would be a haunted patch of desktop.
+WS_EX_TRANSPARENT = 0x00000020
 LWA_ALPHA = 0x00000002
 
 SW_HIDE = 0
@@ -302,6 +314,31 @@ def apply_glass(window):
         log.info("could not restyle the window; it stays opaque")
 
 
+def adopt_solid_window():
+    """Solid mode skips apply_glass, but vanish() still needs the handle and
+    a layered style to fade. Alpha stays pinned at 255, so 'solid' keeps
+    meaning exactly that -- the only fade this enables is the one to zero
+    while the music is paused."""
+    global _hwnd
+    hwnd = None
+    for _ in range(100):
+        hwnd = find_visible_window(TITLE)
+        if hwnd:
+            break
+        time.sleep(0.05)
+    if not hwnd:
+        log.info("could not find the window; pausing will not hide it")
+        return
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+        _hwnd = hwnd
+        set_alpha(255)
+    except Exception:
+        log.debug("could not restyle the solid window", exc_info=True)
+
+
 def set_size(width, height):
     """Resize past the WinForms minimum.
 
@@ -321,14 +358,15 @@ def set_size(width, height):
         return False
 
 
-def set_alpha(value):
+def set_alpha(value, floor=40):
     """Change how much of the desktop shows through. Cheap enough to call on
-    every hover."""
+    every hover. The floor keeps hover fades from ever losing the window by
+    mistake; only vanish() passes 0, and does so on purpose."""
     if not _hwnd:
         return
     try:
         ctypes.windll.user32.SetLayeredWindowAttributes(
-            _hwnd, 0, max(40, min(255, int(value))), LWA_ALPHA)
+            _hwnd, 0, max(floor, min(255, int(value))), LWA_ALPHA)
     except Exception:
         log.debug("could not change alpha", exc_info=True)
 
@@ -336,14 +374,14 @@ def set_alpha(value):
 _fade_gen = [0]                 # bumping this abandons any fade in flight
 
 
-def fade_alpha(target, duration=0.15):
+def fade_alpha(target, duration=0.15, floor=40):
     """Ease the layered alpha to target. The alpha is an OS property CSS
     cannot transition, so the snap is smoothed here instead."""
     if not _hwnd:
         return
     _fade_gen[0] += 1
     gen = _fade_gen[0]
-    target = max(40, min(255, int(target)))
+    target = max(floor, min(255, int(target)))
 
     def run():
         user32 = ctypes.windll.user32
@@ -364,10 +402,43 @@ def fade_alpha(target, duration=0.15):
         for i in range(1, steps + 1):
             if _fade_gen[0] != gen:
                 return
-            set_alpha(start + (target - start) * i / steps)
+            set_alpha(start + (target - start) * i / steps, floor=0)
             time.sleep(duration / steps)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def vanish():
+    """Take the overlay off the screen without ever hiding the window.
+
+    The obvious ShowWindow(SW_HIDE) is exactly the hide-and-reshow that has
+    lost pywebview's window for good before (see apply_glass), so the overlay
+    disappears while staying shown: alpha fades to zero, and
+    WS_EX_TRANSPARENT stops the invisible rectangle from eating clicks and
+    hovers meant for whatever is behind it.
+    """
+    if not _hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(_hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(_hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT)
+    except Exception:
+        log.debug("could not make the window click-through", exc_info=True)
+    fade_alpha(0, floor=0)
+
+
+def reappear():
+    """Undo vanish(): catch the pointer again and fade back in, collapsed."""
+    if not _hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(_hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(_hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
+    except Exception:
+        log.debug("could not restore clicks", exc_info=True)
+    fade_alpha(IDLE_ALPHA, floor=0)
 
 
 def saved_position(config):
@@ -441,6 +512,10 @@ def _run(args):
     global ACTIVE_ALPHA, IDLE_ALPHA
     ACTIVE_ALPHA = max(40, min(255, args.alpha))
     IDLE_ALPHA = max(40, min(255, args.idle_alpha))
+    if args.solid:
+        # Solid promises an opaque window; with the handle adopted below the
+        # hover fades would otherwise start dimming it like the glass one.
+        ACTIVE_ALPHA = IDLE_ALPHA = 255
 
     api = Api()
     window = webview.create_window(
@@ -468,6 +543,7 @@ def _run(args):
     def on_start(win):
         if args.solid:
             win.evaluate_js("document.body.classList.add('solid')")
+            adopt_solid_window()
             return
         apply_glass(win)
 

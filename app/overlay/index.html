@@ -502,6 +502,8 @@ let backoff = 500;
 let closeTimer = null;
 let open = false;
 let setupKey = null;        // what the picker was last built from
+let veiled = false;         // window faded out because playback is paused
+let veilTimer = null;
 
 // ---------------------------------------------------------------- rendering
 
@@ -578,6 +580,39 @@ function render() {
   }
 
   renderSetup();
+  syncVeil();
+}
+
+// ------------------------------------------------------------------ veiling
+
+// The overlay leaves the screen with the music: paused means gone, playing
+// means back. Only a real pause counts -- if the daemon or the DJ tab drops,
+// the overlay stays so its guidance ("No DJ tab open") can be seen.
+function pausedNow() {
+  const np = state && state.nowPlaying;
+  return !!(state && state.connected && np && np.title && !np.playing);
+}
+
+function syncVeil() {
+  if (!pausedNow() || open) {
+    clearTimeout(veilTimer);
+    veilTimer = null;
+    if (veiled) {
+      veiled = false;
+      if (window.pywebview) pywebview.api.reappear();
+    }
+    return;
+  }
+  if (veiled || veilTimer) return;
+  // The delay swallows the momentary "paused" the player reports between
+  // tracks, and `open` above keeps the overlay from being yanked out from
+  // under the pointer -- pausing from our own button holds it until you leave.
+  veilTimer = setTimeout(() => {
+    veilTimer = null;
+    if (open || !pausedNow()) return;
+    veiled = true;
+    if (window.pywebview) pywebview.api.vanish();
+  }, 1200);
 }
 
 function renderSetup() {
@@ -651,6 +686,7 @@ function expand() {
   open = true;
   if (window.pywebview) pywebview.api.expand();
   document.body.classList.add("open");
+  syncVeil();               // hovering cancels a pending vanish
 }
 
 function collapse() {
@@ -662,6 +698,7 @@ function collapse() {
     el("moods").classList.remove("show");
     document.body.classList.remove("open");
     if (window.pywebview) pywebview.api.collapse();
+    syncVeil();             // paused and no longer hovered: free to go
   }, 250);
 }
 
