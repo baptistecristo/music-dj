@@ -7,6 +7,7 @@
 
 const DAEMON_URL = "ws://127.0.0.1:8787/bridge";
 const KEEPALIVE_MS = 15000;
+const LAUNCHER = "com.music_dj.launcher";
 
 let ws = null;
 let backoff = 1000;
@@ -108,6 +109,8 @@ function connect() {
   const sock = ws;
 
   ws.onopen = () => {
+    chrome.action.setBadgeBackgroundColor({ color: "#2e7d32" });
+    chrome.action.setBadgeText({ text: "ON" });
     backoff = 1000;
     log("connected to daemon");
     findTab().then((id) => {
@@ -132,6 +135,7 @@ function connect() {
 
   ws.onclose = () => {
     if (ws !== sock) return;          // already superseded; leave the live one alone
+    chrome.action.setBadgeText({ text: "" });
     clearInterval(keepaliveTimer);
     keepaliveTimer = null;
     schedule();
@@ -182,6 +186,38 @@ chrome.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
     tabId = null;
     send({ evt: "tabGone" });
+  }
+});
+
+// ------------------------------------------------------------------ toggle
+
+// The toolbar icon is the DJ's switch: connected means clicking stops it,
+// disconnected means clicking asks the launcher (a native messaging host,
+// registered by host/register.ps1) to start the daemon and overlay. The
+// DJ tab is opened here too, up front, so activation is one click total.
+chrome.action.onClicked.addListener(async () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    send({ evt: "shutdown" });
+    return;
+  }
+  chrome.runtime.sendNativeMessage(LAUNCHER, { cmd: "start" }, (reply) => {
+    if (chrome.runtime.lastError) {
+      log("launcher failed:", chrome.runtime.lastError.message,
+          "-- run app/host/register.ps1, then reload the extension");
+      chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
+      chrome.action.setBadgeText({ text: "ERR" });
+      setTimeout(() => chrome.action.setBadgeText({ text: "" }), 4000);
+      return;
+    }
+    log("launcher:", JSON.stringify(reply));
+    // The reconnect loop may be sitting out a 30s backoff; the daemon
+    // will be up in a moment, so try again now.
+    backoff = 1000;
+    connect();
+  });
+  if (!(await findTab())) {
+    await openTab();
+    try { await inject(tabId); } catch (e) { log("inject after open:", e); }
   }
 });
 

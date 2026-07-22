@@ -4,12 +4,8 @@
   "version": "0.1.0",
   "description": "Bridges the local music-dj daemon to the Apple Music web player.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx5e0qhyEdHG60Ytiw0h9FrR8PE6Vme9LAPMS69MtkChRdl1f/KMBUhzKP+Kb8310Svitxu+Nz7GNESFx3+Tyxh03yJP34aV3b3uAcfug9aHKgCTQVHaSnp8kzbiRo9bzWdmgUPRVbqTmxwHVvKHRUcy6WIJKmH1Ho0QnJ885TFhYeq8ssUePlF5t7zgHDU6tKi6+IZcBqf051BvfnZ2GBvOOj7cLPcJvkP4ozg7cWUyRIO4CjpQWJjzwRhDpPFlmmc8u9vKGbZz6b8k96/nPwaZ5ncJsZuOY5cJybGWaq6ibDXfFz6IBWRhsERyn5j0gIKRDqScSc6Cb90ZzWPESHQIDAQAB",
-  "permissions": [
-    "alarms",
-    "storage",
-    "tabs",
-    "scripting"
-  ],
+  "permissions": ["alarms", "storage", "tabs", "scripting", "nativeMessaging"],
+  "action": { "default_title": "music DJ — click to start or stop" },
   "host_permissions": [
     "https://music.apple.com/*",
     "https://amp-api.music.apple.com/*"
@@ -19,23 +15,15 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://music.apple.com/*"
-      ],
-      "js": [
-        "bridge-main.js"
-      ],
+      "matches": ["https://music.apple.com/*"],
+      "js": ["bridge-main.js"],
       "world": "MAIN",
       "run_at": "document_start",
       "all_frames": false
     },
     {
-      "matches": [
-        "https://music.apple.com/*"
-      ],
-      "js": [
-        "bridge-iso.js"
-      ],
+      "matches": ["https://music.apple.com/*"],
+      "js": ["bridge-iso.js"],
       "world": "ISOLATED",
       "run_at": "document_start",
       "all_frames": false
