@@ -71,6 +71,13 @@ class Api:
                 win.resize(*COLLAPSED)
         fade_alpha(IDLE_ALPHA)
 
+    def quit(self):
+        # The daemon is going down and told us so; take the window with
+        # it. destroy() ends webview.start(), and the process exits.
+        win = self._window()
+        if win:
+            win.destroy()
+
 
 # --------------------------------------------------------------------- glass
 

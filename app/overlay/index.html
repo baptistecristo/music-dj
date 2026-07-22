@@ -812,7 +812,15 @@ function connect() {
   }
   ws.onopen = () => { backoff = 500; socketUp = true; render(); };
   ws.onmessage = (ev) => {
-    try { state = JSON.parse(ev.data); render(); } catch (e) {}
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg && msg.shutdown) {           // the daemon is exiting on purpose
+        if (window.pywebview) pywebview.api.quit();
+        return;
+      }
+      state = msg;
+      render();
+    } catch (e) {}
   };
   ws.onclose = () => {
     socketUp = false;

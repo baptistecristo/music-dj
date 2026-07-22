@@ -964,3 +964,31 @@ async def test_a_mood_change_during_a_refill_is_not_dropped():
     await inflight
     assert dj.queue["mood"] == "debugging", "a stale refill overwrote the new mood"
     assert library.queue_tracks(dj.queue), "queue left empty after the mood change"
+
+
+# ------------------------------------------------------------------ shutdown
+
+
+async def test_shutdown_event_pauses_broadcasts_and_sets_event():
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    dj.playing = True
+    seen = []
+    dj.subscribe(seen.append)
+
+    await dj.on_event({"evt": "shutdown"})
+
+    assert {"cmd": "pause"} in tx.calls
+    assert {"shutdown": True} in seen
+    assert dj.shutdown_event.is_set()
+
+
+async def test_shutdown_when_not_playing_skips_pause():
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    dj.playing = False
+
+    await dj.on_event({"evt": "shutdown"})
+
+    assert {"cmd": "pause"} not in tx.calls
+    assert dj.shutdown_event.is_set()

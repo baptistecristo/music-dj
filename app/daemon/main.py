@@ -42,7 +42,17 @@ async def run(args):
     logging.getLogger("music-dj").info(
         "mood %s (lane %s); waiting for the extension", dj.mood, dj.lane)
 
-    await asyncio.gather(srv.run(), dj.watch_state(), start_when_ready(dj))
+    runner = asyncio.ensure_future(asyncio.gather(
+        srv.run(), dj.watch_state(), start_when_ready(dj)))
+    stopper = asyncio.ensure_future(dj.shutdown_event.wait())
+    await asyncio.wait([runner, stopper],
+                       return_when=asyncio.FIRST_COMPLETED)
+    runner.cancel()
+    stopper.cancel()
+    # The shutdown broadcast to the overlay rides on tasks created just
+    # before the event was set; give them a beat to flush.
+    await asyncio.sleep(0.2)
+    logging.getLogger("music-dj").info("daemon stopped")
 
 
 async def start_when_ready(dj, poll=3.0):
