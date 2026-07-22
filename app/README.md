@@ -27,19 +27,20 @@ Allow autoplay for the site, or playback stops between tracks: click the icon
 left of the address bar → **Permissions for this site** → **Media autoplay** →
 **Allow**.
 
-**2. The daemon.**
+**2. Everything else: double-click `app\start.cmd`.**
+
+It starts the daemon and the overlay with no console windows. You do NOT
+need an Apple Music tab open -- if there is none, the extension opens one
+itself, pinned, in the background. The one thing that must already be true:
+Edge is running with the extension loaded, and you are signed in to Apple
+Music in that profile.
+
+When something is wrong, run the pieces by hand to see the logs:
 
 ```
 cd app
 python -m daemon.main --verbose
-```
-
-**3. The overlay**, in a second terminal.
-
-```
-cd app
-pythonw -m overlay.app        # no console window
-python -m overlay.app         # with logs, when something is wrong
+python -m overlay.app         # second terminal
 ```
 
 Useful flags: `--no-claude` picks from the profile only; `--solid` and

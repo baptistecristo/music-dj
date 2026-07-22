@@ -36,6 +36,11 @@ class DJ:
         self.seeds = moods.parse_seeds(store.read_text(store.PROFILE))
         self.ratings = store.read_json(store.RATINGS, {})
         self.history = store.read_json(store.HISTORY, {})
+        self.signals = store.read_json(store.SIGNALS, {})
+        self.avoid_ids = {str(i) for i in
+                          (store.read_json(store.PLAYLIST_TRACKS, {}) or {})
+                          .get("ids", [])}
+        self._library_refreshed = False
         self.queue = store.read_json(store.QUEUE, {}) or \
             library.make_queue([], None, None, "profile", self.now())
 
@@ -44,6 +49,7 @@ class DJ:
         self.current = None
         self.notice = None
         self.setup = None            # playlist picker payload, when offered
+        self.lyrics = None           # {"catalogId", "ttml"} for the current track
         self.previews_only = False
         self.autoplay_blocked = False
         self.playing = False
@@ -75,6 +81,7 @@ class DJ:
                                         self.mood)
         return {
             "nowPlaying": {
+                "catalogId": (self.current or {}).get("catalogId"),
                 "title": (self.current or {}).get("title"),
                 "artist": (self.current or {}).get("artist"),
                 "artworkUrl": (self.current or {}).get("artworkUrl"),
@@ -91,6 +98,7 @@ class DJ:
             "connected": bool(self.tx.connected),
             "notice": self.notice,
             "setup": self.setup,
+            "lyrics": self.lyrics,
         }
 
     def push(self):
@@ -180,6 +188,20 @@ class DJ:
 
             banned = library.banned_ids(self.ratings, mood)
             resolved = [t for t in resolved if str(t["catalogId"]) not in banned]
+
+            # Repeated early skips shun a track in this mood. A 4-5 star
+            # rating outranks the skips; having no rating at all is neutral
+            # and never counts against anything.
+            shunned = library.skip_shunned(self.signals, mood)
+            for stars in (4, 5):
+                shunned -= {str(e["catalogId"])
+                            for e in library.rated_in_mood(self.ratings, mood, stars)}
+            resolved = [t for t in resolved if str(t["catalogId"]) not in shunned]
+
+            # Already in one of their playlists = already found. Offer what
+            # they have not curated yet.
+            resolved = [t for t in resolved
+                        if str(t["catalogId"]) not in self.avoid_ids]
 
             keep = library.queue_tracks(self.queue) + resolved
             self.queue = library.make_queue(keep, mood, lane, source, self.now())
@@ -307,6 +329,7 @@ class DJ:
                         "the DJ tab.", track.get("title"), state)
 
         self.current = track
+        self.lyrics = None           # they belong to the previous song
         self.history = library.remember_play(self.history, track, self.now())
         store.write_json(store.HISTORY, self.history)
         self.notice = None
@@ -349,6 +372,23 @@ class DJ:
                 log.debug("ignoring trackEnded for %s; we are on %s",
                           ended, playing)
                 return
+            # A song played to its end is a quiet nod in this mood.
+            if self.current:
+                self.signals = library.record_signal(
+                    self.signals, self.current, self.mood, "complete",
+                    self.current.get("position", 0),
+                    self.current.get("duration"), self.now())
+                store.write_json(store.SIGNALS, self.signals)
+            # A song boundary is a decision point: re-read the activity
+            # rather than trusting a queue built minutes ago. With current
+            # cleared, a changed mood switches immediately via set_mood.
+            self.current = None
+            if not self.pinned:
+                fresh = (store.read_json(store.STATE, {}) or {}).get("current_mood")
+                if fresh and fresh != self.mood:
+                    log.info("activity moved to %s while that song played", fresh)
+                    await self.set_mood(fresh)
+                    return
             # Apple's own autoplay would pick the next track for us; we skip
             # deliberately, because curating is the entire point.
             await self.play_next()
@@ -368,7 +408,15 @@ class DJ:
                 self.current["duration"] = evt.get("duration") or self.current.get("duration")
             elif evt.get("catalogId"):
                 # Something outside the DJ changed the track (the user clicked
-                # around in the tab). Follow it rather than fighting it.
+                # around in the tab). Follow it rather than fighting it --
+                # but abandoning our pick early is a skip in all but name.
+                if self.current:
+                    self.signals = library.record_signal(
+                        self.signals, self.current, self.mood, "skip",
+                        self.current.get("position", 0),
+                        self.current.get("duration"), self.now())
+                    store.write_json(store.SIGNALS, self.signals)
+                self.lyrics = None
                 self.current = {
                     "catalogId": evt.get("catalogId"), "title": evt.get("title"),
                     "artist": evt.get("artist"), "artworkUrl": evt.get("artworkUrl"),
@@ -397,6 +445,10 @@ class DJ:
                 self.push()
                 return
             self.notice = None
+            # Each start is a chance to notice what they added to the library
+            # since last time; the advisor reads the snapshot on every batch.
+            if not self._library_refreshed:
+                asyncio.create_task(self.refresh_library_view())
             # A reload wipes the MusicKit queue and every listener, so re-seed
             # what was playing. This hangs off "ready" rather than "injected"
             # because injected fires at document_start, when MusicKit does not
@@ -424,6 +476,13 @@ class DJ:
 
         if action in ("pause", "resume", "skip", "previous"):
             if action == "skip":
+                # A skip is a rating they never typed; note how far in it came.
+                if self.current:
+                    self.signals = library.record_signal(
+                        self.signals, self.current, self.mood, "skip",
+                        self.current.get("position", 0),
+                        self.current.get("duration"), self.now())
+                    store.write_json(store.SIGNALS, self.signals)
                 await self.play_next()      # our queue, not Apple's
             else:
                 await self.tx.call({"cmd": action})
@@ -447,6 +506,9 @@ class DJ:
                 await self.set_mood(mood)
             else:
                 self.push()
+
+        elif action == "lyrics":
+            await self.fetch_lyrics()
 
         elif action == "chooseStarred":
             await self.choose_starred(msg.get("id"), msg.get("name"))
@@ -490,6 +552,68 @@ class DJ:
         self.notice = ("couldn't add to %s" % target.get("name")) if reply.get("error") \
             else "added to %s" % (target.get("name") or "playlist")
         self.push()
+
+    async def refresh_library_view(self):
+        """Snapshot what was recently added to the library.
+
+        Best effort: a failure leaves the previous snapshot in place and the
+        music none the wiser.
+        """
+        try:
+            reply = await self.tx.call({"cmd": "recentlyAdded"}, timeout=60)
+            items = reply.get("items") if isinstance(reply, dict) else None
+            if items is None:
+                # An old page script may not know the command yet; the flag
+                # stays down so the next ready (post-reload) tries again.
+                log.info("could not refresh the library view (%s)",
+                         reply.get("error", "no items"))
+                return
+            self._library_refreshed = True
+            store.write_json(store.LIBRARY_RECENT,
+                             {"fetchedAt": self.now(), "items": items})
+            log.info("library view refreshed: %d recent additions", len(items))
+
+            # Their playlists are already curated; the DJ's job is what is
+            # NOT in them, so gather those ids to keep out of the picks.
+            listing = await self.tx.call({"cmd": "listPlaylists"}, timeout=60)
+            ids = set()
+            for pl in (listing.get("playlists") or []):
+                tracks = await self.tx.call(
+                    {"cmd": "playlistTracks", "playlistId": pl["id"]},
+                    timeout=60)
+                for tid in (tracks.get("trackIds") or []):
+                    ids.add(str(tid))
+            if ids:
+                self.avoid_ids = ids
+                store.write_json(store.PLAYLIST_TRACKS,
+                                 {"fetchedAt": self.now(), "ids": sorted(ids)})
+                log.info("avoiding %d tracks already in their playlists",
+                         len(ids))
+        except Exception:
+            log.debug("library refresh failed", exc_info=True)
+
+    async def fetch_lyrics(self):
+        """Fetch and cache lyrics for the current track, once."""
+        track = self.current
+        if not track or not track.get("catalogId"):
+            return
+        cid = track["catalogId"]
+        if self.lyrics and self.lyrics.get("catalogId") == cid:
+            self.push()              # already have them; just re-announce
+            return
+        reply = await self.tx.call({"cmd": "lyrics", "catalogId": cid},
+                                   timeout=30)
+        if not isinstance(reply, dict) or reply.get("error"):
+            # An old page script answers "unknown command". That is not the
+            # same as the song having no lyrics -- say what would fix it and
+            # leave the cache empty so a later try can succeed.
+            self.notice = "lyrics need a reloaded DJ tab"
+            self.push()
+            return
+        # The reply may arrive after the song has already moved on.
+        if self.current and self.current.get("catalogId") == cid:
+            self.lyrics = {"catalogId": cid, "ttml": reply.get("ttml")}
+            self.push()
 
     async def offer_setup(self):
         """First five-star with no playlist chosen: offer the user's own

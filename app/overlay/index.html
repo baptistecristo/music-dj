@@ -52,10 +52,9 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    /* The window is a fixed height but the why-line is one or two lines and the
-       notice comes and goes, so centre the stack: the slack is shared top and
-       bottom instead of pooling under the controls. */
-    justify-content: center;
+    /* The window is resized to fit this content (see fitWindow), so the stack
+       starts at the top and there is no slack to distribute. */
+    justify-content: flex-start;
     padding: 11px;
     border-radius: 10px;
     /* Glass: tinted enough to keep text legible over a bright desktop, and
@@ -66,12 +65,11 @@
                 inset 0 1px 0 rgba(255,255,255,.13);
   }
 
-  /* Open, the panel is a surface you read from, so it stops being glass:
-     the window alpha dims text as readily as background, and a see-through
-     title over a busy desktop cannot be read at all. */
+  /* Open, the panel leans darker so text stays readable, but keeps a little
+     glass rather than going fully solid. */
   body.open #shell {
-    background: rgba(26, 26, 31, .97);
-    backdrop-filter: none;
+    background: rgba(26, 26, 31, .86);
+    backdrop-filter: blur(28px) saturate(160%);
   }
 
   body.solid #shell {
@@ -135,12 +133,13 @@
 
   .panel {
     opacity: 0;
-    transform: translateY(-3px);
-    transition: opacity 140ms ease 40ms, transform 180ms ease 40ms;
+    /* No slide and no delay: hovering should feel like the panel was already
+       there, not like it glides into place. */
+    transition: opacity 80ms ease;
     pointer-events: none;
   }
 
-  body.open .panel { opacity: 1; transform: none; pointer-events: auto; }
+  body.open .panel { opacity: 1; pointer-events: auto; }
   /* Qualified by #shell so this outranks the id selectors below that set
      display on individual rows -- otherwise the scrubber and the controls
      would sit on top of the collapsed album art. */
@@ -168,23 +167,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
-  /* The signature: Claude's stated reason, set as a margin note. Capped at two
-     lines so the window height stays predictable. */
-  #why {
-    margin: 8px 0 0;
-    padding-left: 8px;
-    border-left: 2px solid var(--gold);
-    color: var(--muted);
-    font-size: 11px;
-    font-style: italic;
-    line-height: 1.3;
-    max-height: 29px;
-    overflow: hidden;
-    flex: 0 0 auto;
-  }
-
-  #why:empty { display: none; }
 
   /* ---------------------------------------------------------- the scrubber */
 
@@ -274,7 +256,7 @@
 
   #stars span {
     color: var(--dim);
-    font-size: 13px;
+    font-size: 17px;
     line-height: 1;
     cursor: pointer;
     transition: color 90ms ease;
@@ -314,6 +296,42 @@
 
   #moodname { overflow: hidden; text-overflow: ellipsis; }
 
+  /* ---------------------------------------------------------------- lyrics */
+
+  #lyricsbtn { margin-right: 9px; }
+  #lyricsbtn.on { color: var(--gold) !important; }
+
+  #right { display: flex; align-items: center; flex: 0 0 auto; }
+
+  #lyrics {
+    display: none;
+    margin-top: 8px;
+    max-height: 168px;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    flex: 0 0 auto;
+  }
+
+  #lyrics.show { display: block; }
+  #lyrics::-webkit-scrollbar { width: 0; }
+
+  #lyrics div {
+    padding: 2px 0;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--dim);
+    transition: color 200ms ease;
+  }
+
+  #lyrics div.now { color: var(--text); font-weight: 600; }
+  #lyrics div.plain { color: var(--muted); }
+  #lyrics div.meta {
+    font-family: var(--utility);
+    font-size: 10px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
   #notice {
     color: var(--dim);
     font-family: var(--utility);
@@ -330,47 +348,63 @@
 
   /* ------------------------------------------------------------ mood picker */
 
-  /* The chip now sits at the bottom of the panel, so the menu opens upward. */
+  /* A sheet over the whole panel, like the playlist picker: both groups side
+     by side, everything visible at once, nothing to scroll. */
   #moods {
     display: none;
     position: absolute;
-    right: 11px; bottom: 40px;
-    background: rgba(28, 28, 34, .82);
-    backdrop-filter: blur(20px) saturate(160%);
+    inset: 6px;
+    flex-direction: column;
+    background: rgba(28, 28, 34, .97);
     border: 1px solid rgba(255,255,255,.10);
-    border-radius: 6px;
-    padding: 3px 0;
+    border-radius: 8px;
+    padding: 5px 6px 4px;
     box-shadow: 0 8px 20px rgba(0,0,0,.55);
-    z-index: 10;
-    min-width: 124px;
-    max-height: 150px;
-    overflow-y: auto;
+    z-index: 15;
+    overflow: hidden;
   }
 
-  #moods.show { display: block; }
+  #moods.show { display: flex; }
 
-  #moods div {
-    padding: 5px 12px;
+  /* Never let flex squeeze the columns -- squeezed rows slide under the
+     unpin footer and stop being clickable. */
+  #moodcols { display: flex; flex: 1 0 auto; gap: 4px; }
+  #moodcols .col { flex: 1 1 50%; min-width: 0; }
+
+  #moods .item {
+    padding: 3px 10px;
+    border-radius: 4px;
     font-family: var(--utility);
     font-size: 10.5px;
     letter-spacing: .06em;
     text-transform: uppercase;
     color: var(--muted);
     cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  #moods div:hover { background: var(--chip); color: var(--text); }
-  #moods div.grouphead {
+  #moods .item:hover { background: var(--chip); color: var(--text); }
+
+  #moods .grouphead {
     color: var(--dim);
+    font-family: var(--utility);
     font-size: 9px;
     letter-spacing: .14em;
-    padding: 4px 12px 2px;
-    cursor: default;
+    text-transform: uppercase;
+    padding: 2px 10px 2px;
   }
 
-  #moods div.grouphead:hover { background: none; color: var(--dim); }
-
-  #moods div.sep { border-top: 1px solid var(--hairline); margin-top: 3px; padding-top: 6px; }
+  #moods .unpin {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--hairline);
+    margin-top: 4px;
+    padding-top: 6px;
+    padding-bottom: 4px;
+    text-align: center;
+    color: var(--dim);
+  }
 
   /* -------------------------------------------------------- playlist picker
 
@@ -456,8 +490,6 @@
     </div>
   </div>
 
-  <div id="why" class="panel pywebview-drag-region"></div>
-
   <div id="prow" class="panel pywebview-drag-region">
     <span id="elapsed" class="clock pywebview-drag-region">0:00</span>
     <div id="progress" class="pywebview-drag-region"><i id="bar"></i></div>
@@ -471,8 +503,13 @@
       <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
       <button data-act="skip" title="Next">&#xE893;</button>
     </div>
-    <div id="chip"><span id="dot"></span><span id="moodname">&#x2014;</span></div>
+    <div id="right">
+      <button id="lyricsbtn" title="Lyrics">&#xE8D6;</button>
+      <div id="chip"><span id="dot"></span><span id="moodname">&#x2014;</span></div>
+    </div>
   </div>
+
+  <div id="lyrics" class="panel"></div>
 
   <div id="notice" class="panel pywebview-drag-region"></div>
 </div>
@@ -502,6 +539,11 @@ let backoff = 500;
 let closeTimer = null;
 let open = false;
 let setupKey = null;        // what the picker was last built from
+let lyricsOpen = false;     // the user's toggle, kept across tracks
+let lyricsFor = null;       // catalogId the pane is currently built for
+let lyricsAsked = null;     // catalogId last requested, to ask only once
+let lyricsLines = [];       // [{t: ms|null, el: node}]
+let lastFit = 0;            // last height asked of the window
 
 // ---------------------------------------------------------------- rendering
 
@@ -553,7 +595,6 @@ function render() {
     ? "You pinned this mood. Click to change or follow your activity again."
     : "Following your activity. Click to pin a mood.";
 
-  el("why").textContent = (state && state.why) || "";
   el("notice").textContent = (state && state.notice) || "";
 
   // Ratings are per-mood, so the tooltip says which mood: one star while
@@ -561,23 +602,168 @@ function render() {
   const rating = (state && state.rating) || 0;
   const when = mood.name ? " while " + mood.name : " in this mood";
   const stars = el("stars");
-  stars.innerHTML = "";
-  // Built in reverse so the CSS sibling selector can light every star to the
-  // left of the one under the pointer.
-  for (let i = 5; i >= 1; i--) {
-    const star = document.createElement("span");
-    star.textContent = "★";
+  // Built once and only restyled after that: state pushes arrive every
+  // second while music plays, and rebuilding the row destroyed the element
+  // under the pointer mid-click -- the click just vanished.
+  if (!stars.childElementCount) {
+    // Built in reverse so the CSS sibling selector can light every star to
+    // the left of the one under the pointer.
+    for (let i = 5; i >= 1; i--) {
+      const star = document.createElement("span");
+      star.textContent = "★";
+      star.dataset.stars = i;
+      star.onclick = (ev) => {
+        ev.stopPropagation();
+        // Clicking the rating you already have clears it.
+        const current = (state && state.rating) || 0;
+        send({action: "rate", stars: i === current ? 0 : i});
+      };
+      stars.appendChild(star);
+    }
+  }
+  for (const star of stars.children) {
+    const i = +star.dataset.stars;
     star.className = i <= rating ? "on" : "";
     star.title = i + (i === 1 ? " star" : " stars") + when;
-    star.onclick = (ev) => {
-      ev.stopPropagation();
-      // Clicking the rating you already have clears it.
-      send({action: "rate", stars: i === rating ? 0 : i});
-    };
-    stars.appendChild(star);
   }
 
   renderSetup();
+  renderLyrics();
+  fitWindow();
+}
+
+// The OS window is sized to the content. Layout does not need the window to
+// be big yet -- the shell is measured at panel width while still clipped by
+// the collapsed window -- so the height is known before the one and only
+// resize, and the panel never visibly shrinks after opening.
+function measureHeight() {
+  const shell = el("shell");
+  shell.style.width = "368px";
+  shell.style.height = "auto";
+  const h = Math.ceil(shell.getBoundingClientRect().height);
+  shell.style.width = "";
+  shell.style.height = "";
+  return h;
+}
+
+function fitWindow() {
+  if (!open || !window.pywebview) return;
+  requestAnimationFrame(() => {
+    if (!open) return;
+    let h = measureHeight();
+    // Sheets that cover the panel (mood picker) may need more room than the
+    // content behind them; the window grows to whichever is taller.
+    const moods = el("moods");
+    if (moods.classList.contains("show")) {
+      // inset pins the sheet to the window, so its natural height has to be
+      // measured unpinned -- scrollHeight of the pinned box reports the
+      // squeezed size, not the needed one.
+      moods.style.height = "auto";
+      moods.style.bottom = "auto";
+      const need = moods.offsetHeight + 12;
+      moods.style.height = "";
+      moods.style.bottom = "";
+      h = Math.max(h, need);
+    }
+    if (Math.abs(h - lastFit) > 2) {
+      lastFit = h;
+      pywebview.api.expand(h);
+    }
+  });
+}
+
+// ------------------------------------------------------------------ lyrics
+
+// Apple's TTML: <p begin="…" end="…">line</p>. begin is "12.345s" or a
+// clock value like "1:23.456"; some tracks carry no timing at all.
+function ttmlMs(v) {
+  if (v == null) return null;
+  v = String(v).trim();
+  if (!v) return null;
+  if (!v.includes(":")) {
+    const s = parseFloat(v);                 // "12.345s" or bare seconds
+    return isNaN(s) ? null : Math.round(s * 1000);
+  }
+  let total = 0;
+  for (const part of v.split(":")) {
+    const n = parseFloat(part);
+    if (isNaN(n)) return null;
+    total = total * 60 + n;
+  }
+  return Math.round(total * 1000);
+}
+
+function parseTTML(ttml) {
+  try {
+    const doc = new DOMParser().parseFromString(ttml, "text/xml");
+    return [...doc.getElementsByTagName("p")]
+      .map((p) => ({ t: ttmlMs(p.getAttribute("begin")),
+                     text: (p.textContent || "").trim() }))
+      .filter((l) => l.text);
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderLyrics() {
+  const box = el("lyrics");
+  const np = state && state.nowPlaying;
+  el("lyricsbtn").classList.toggle("on", lyricsOpen);
+  if (!lyricsOpen || !np || !np.title) {
+    box.classList.remove("show");
+    return;
+  }
+  box.classList.add("show");
+
+  const have = state && state.lyrics;   // {catalogId, ttml|null} or null
+  // A new song wipes the daemon's cache; if the pane is open, chase it.
+  if (!have && np.catalogId && lyricsAsked !== np.catalogId) {
+    lyricsAsked = np.catalogId;
+    send({action: "lyrics"});
+  }
+  const key = have ? have.catalogId : null;
+  if (key !== lyricsFor) {
+    lyricsFor = key;
+    box.innerHTML = "";
+    lyricsLines = [];
+    if (!have) {
+      const d = document.createElement("div");
+      d.className = "meta";
+      d.textContent = "fetching lyrics…";
+      box.appendChild(d);
+    } else if (!have.ttml) {
+      const d = document.createElement("div");
+      d.className = "meta";
+      d.textContent = "no lyrics for this one";
+      box.appendChild(d);
+    } else {
+      const lines = parseTTML(have.ttml);
+      const timed = lines.some((l) => l.t != null);
+      for (const line of lines) {
+        const d = document.createElement("div");
+        d.textContent = line.text;
+        if (!timed) d.className = "plain";
+        box.appendChild(d);
+        lyricsLines.push({ t: timed ? line.t : null, el: d });
+      }
+      box.scrollTop = 0;
+    }
+  }
+
+  // Follow the song: light the line the playhead is in and keep it centred.
+  const pos = (np.position || 0);
+  let current = null;
+  for (const line of lyricsLines) {
+    if (line.t != null && line.t <= pos) current = line;
+  }
+  for (const line of lyricsLines) {
+    line.el.classList.toggle("now", line === current);
+  }
+  if (current) {
+    const want = current.el.offsetTop - box.clientHeight / 2 +
+                 current.el.offsetHeight / 2;
+    box.scrollTop = Math.max(0, want);
+  }
 }
 
 function renderSetup() {
@@ -649,8 +835,9 @@ function expand() {
   clearTimeout(closeTimer);
   if (open) return;
   open = true;
-  if (window.pywebview) pywebview.api.expand();
+  lastFit = 0;
   document.body.classList.add("open");
+  fitWindow();
 }
 
 function collapse() {
@@ -687,28 +874,35 @@ el("chip").addEventListener("click", (e) => {
   e.stopPropagation();
   const box = el("moods");
   if (!box.innerHTML) {
-    const group = (label, moods, first) => {
+    const cols = document.createElement("div");
+    cols.id = "moodcols";
+    const column = (label, moods) => {
+      const col = document.createElement("div");
+      col.className = "col";
       const h = document.createElement("div");
       h.textContent = label;
-      h.className = "grouphead" + (first ? "" : " sep");
-      box.appendChild(h);
+      h.className = "grouphead";
+      col.appendChild(h);
       moods.forEach((m) => {
         const d = document.createElement("div");
         d.textContent = m;
+        d.className = "item";
         d.onclick = (ev) => {
           ev.stopPropagation();
           send({action: "setMood", mood: m, pinned: true});
           box.classList.remove("show");
         };
-        box.appendChild(d);
+        col.appendChild(d);
       });
+      return col;
     };
-    group("Vibe", VIBES, true);
-    group("Activity", ACTIVITY, false);
+    cols.appendChild(column("Vibe", VIBES));
+    cols.appendChild(column("Activity", ACTIVITY));
+    box.appendChild(cols);
 
     const unpin = document.createElement("div");
     unpin.textContent = "↺ Follow my activity";
-    unpin.className = "sep";
+    unpin.className = "item unpin";
     unpin.onclick = (ev) => {
       ev.stopPropagation();
       send({action: "unpin"});
@@ -717,13 +911,25 @@ el("chip").addEventListener("click", (e) => {
     box.appendChild(unpin);
   }
   box.classList.toggle("show");
+  fitWindow();
 });
 
-document.addEventListener("click", () => el("moods").classList.remove("show"));
+document.addEventListener("click", () => {
+  el("moods").classList.remove("show");
+  fitWindow();
+});
 
 el("setupclose").addEventListener("click", (ev) => {
   ev.stopPropagation();
   send({action: "dismissSetup"});
+});
+
+el("lyricsbtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  lyricsOpen = !lyricsOpen;
+  if (lyricsOpen) send({action: "lyrics"});
+  lyricsFor = undefined;      // force a rebuild either way
+  render();
 });
 
 render();

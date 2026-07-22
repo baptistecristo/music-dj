@@ -23,6 +23,30 @@ async function findTab() {
   return tabId;
 }
 
+// No DJ tab anywhere? Open one ourselves -- pinned and in the background, so
+// starting the daemon is the only launch step there is. Resolves when the
+// page has loaded (or after a generous timeout, for slow networks).
+async function openTab() {
+  const tab = await chrome.tabs.create({
+    url: "https://music.apple.com/", pinned: true, active: false });
+  tabId = tab.id;
+  await new Promise((resolve) => {
+    const done = (id, info) => {
+      if (id === tab.id && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(done);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(done);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(done);
+      resolve();
+    }, 20000);
+  });
+  log("opened a DJ tab:", tabId);
+  return tabId;
+}
+
 // Content scripts declared in the manifest only reach pages that load after the
 // extension is installed. A tab that was already open when you loaded it has no
 // bridge in it, and every command fails with "Receiving end does not exist".
@@ -36,7 +60,12 @@ async function inject(id) {
 
 async function toPage(payload) {
   if (tabId == null) await findTab();
-  if (tabId == null) throw new Error("no music.apple.com tab open");
+  if (tabId == null) {
+    await openTab();
+    await inject(tabId);
+    // The fresh page announces itself and MusicKit takes a moment to exist.
+    await new Promise((r) => setTimeout(r, 500));
+  }
   try {
     await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
     return;
@@ -45,9 +74,10 @@ async function toPage(payload) {
   }
 
   // Either the tab id went stale (closed, navigated away) or the bridge was
-  // never injected. Find the tab again, inject, and retry once.
+  // never injected. Find the tab again -- opening one if it is gone --
+  // inject, and retry once.
   tabId = null;
-  if (!(await findTab())) throw new Error("no music.apple.com tab open");
+  if (!(await findTab())) await openTab();
   try {
     await inject(tabId);
   } catch (e) {
