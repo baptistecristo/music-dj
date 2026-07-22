@@ -25,11 +25,15 @@ log = logging.getLogger("music-dj")
 # while a track is still playing -- so a generous ceiling costs nothing, and
 # the fallback still catches a CLI that has genuinely hung.
 TIMEOUT = 45
-BATCH = 12
+# Small batches on purpose: each refill is a fresh look at what they are
+# doing, so the DJ re-decides every few songs instead of every ten.
+BATCH = 6
 RECENT_IN_PROMPT = 30
+ADDITIONS_IN_PROMPT = 20
 
 
-def build_prompt(profile, mood, lane, history, ratings):
+def build_prompt(profile, mood, lane, history, ratings,
+                 signals=None, additions=None):
     """Everything Claude needs to pick well, and nothing else."""
     recent = []
     for play in (history or {}).get("plays", [])[:RECENT_IN_PROMPT]:
@@ -39,6 +43,7 @@ def build_prompt(profile, mood, lane, history, ratings):
 
     loved = library.rated_in_mood(ratings, mood, 5)
     hated = library.rated_in_mood(ratings, mood, 1)
+    skipped = library.often_skipped(signals, mood)
 
     def names(entries):
         return [("%s — %s" % (e.get("title"), e.get("artist")))
@@ -68,6 +73,21 @@ def build_prompt(profile, mood, lane, history, ratings):
     if hated:
         parts += ["", "## They rated these 1 star in this exact mood",
                   "\n".join(names(hated)), "Avoid anything like these here."]
+    if skipped:
+        parts += ["", "## They skip these early in this mood",
+                  "\n".join(skipped),
+                  "Read that as a no for this register, here. A song they "
+                  "simply never rated is neutral, not disliked."]
+
+    adds = [("%s — %s" % (a.get("name"), a.get("artist"))) if a.get("artist")
+            else str(a.get("name"))
+            for a in (additions or {}).get("items", [])[:ADDITIONS_IN_PROMPT]
+            if a.get("name")]
+    if adds:
+        parts += ["", "## Recently added to their library",
+                  "\n".join(adds),
+                  "Fresh interest. Weave these in when they fit the mood, "
+                  "rather than only replaying old favourites."]
 
     parts += [
         "",
@@ -78,8 +98,10 @@ def build_prompt(profile, mood, lane, history, ratings):
         "Each 'why' is one short line, max 60 characters, addressed to them. "
         "Say what actually motivated the pick — a link to their taste, the "
         "mood, or something they rated. Do not pad it out.",
-        "Prefer things in or adjacent to their library. Vary the artists: at "
-        "most one song per artist.",
+        "Prefer things in or adjacent to their library, but not songs already "
+        "saved in their own playlists -- they know those; bring them what "
+        "they have not curated yet. Vary the artists: at most one song per "
+        "artist.",
     ]
     return "\n".join(parts)
 
@@ -141,8 +163,11 @@ def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,
     profile = profile if profile is not None else store.read_text(store.PROFILE)
     history = history if history is not None else store.read_json(store.HISTORY, {})
     ratings = ratings if ratings is not None else store.read_json(store.RATINGS, {})
+    signals = store.read_json(store.SIGNALS, {})
+    additions = store.read_json(store.LIBRARY_RECENT, {})
 
-    prompt = build_prompt(profile, mood, lane, history, ratings)
+    prompt = build_prompt(profile, mood, lane, history, ratings,
+                          signals=signals, additions=additions)
     raw = ask_claude(prompt, timeout=timeout, runner=runner)
     picks = picker.validate_claude_picks(extract_json(raw)) if raw else []
 

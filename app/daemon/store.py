@@ -24,6 +24,9 @@ PROFILE = "taste-profile.md"
 RATINGS = "ratings.json"
 HISTORY = "history.json"
 QUEUE = "queue.json"
+SIGNALS = "signals.json"           # skips and full listens, per mood
+LIBRARY_RECENT = "library-recent.json"   # what they added lately, per start
+PLAYLIST_TRACKS = "playlist-tracks.json" # ids already curated into playlists
 
 
 def path(name):

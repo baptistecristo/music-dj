@@ -150,6 +150,40 @@
     return { ok: true, state: mk.playbackState };
   }
 
+  async function lyrics(catalogId) {
+    // Timed TTML when Apple has it; many tracks simply have none, and that
+    // is an answer rather than an error.
+    try {
+      const data = await api("/v1/catalog/" + storefront() + "/songs/" +
+                             encodeURIComponent(String(catalogId)) + "/lyrics");
+      const item = (data.data || [])[0];
+      return { ttml: (item && item.attributes && item.attributes.ttml) || null };
+    } catch (_) {
+      return { ttml: null };
+    }
+  }
+
+  async function recentlyAdded() {
+    // What landed in the library lately -- albums and playlists, newest
+    // first. Two pages is plenty of signal for the advisor.
+    const out = [];
+    for (let offset = 0; offset < 50; offset += 25) {
+      const page = await api("/v1/me/library/recently-added?limit=25&offset=" +
+                             offset);
+      const items = page.data || [];
+      for (const it of items) {
+        const a = it.attributes || {};
+        out.push({
+          type: (it.type || "").replace("library-", ""),
+          name: a.name || null,
+          artist: a.artistName || a.curatorName || null,
+        });
+      }
+      if (items.length < 25) break;
+    }
+    return { items: out };
+  }
+
   async function listPlaylists() {
     // Library pagination via the `next` field stops early and silently. Step
     // offsets explicitly instead, and stop only on a short page.
@@ -265,6 +299,8 @@
       case "resume":        ready(); kick(); return { ok: true, state: mk.playbackState };
       case "skip":          await ready().skipToNextItem(); return { ok: true };
       case "previous":      await ready().skipToPreviousItem(); return { ok: true };
+      case "lyrics":        return await lyrics(msg.catalogId);
+      case "recentlyAdded": return await recentlyAdded();
       case "listPlaylists": return await listPlaylists();
       case "playlistTracks":return await playlistTrackIds(msg.playlistId);
       case "createPlaylist":return await createPlaylist(msg.name);

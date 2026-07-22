@@ -24,8 +24,10 @@ from daemon import store
 # scrubber with elapsed/remaining times, then hearts, transport and mood.
 # The expanded height is the sum of those rows plus padding, with a little
 # slack -- shrink it and the notice line clips.
-COLLAPSED = (95, 95)
-EXPANDED = (368, 210)
+# Collapsed matches the cover inside the open panel exactly, so hovering
+# never makes the artwork jump size.
+COLLAPSED = (60, 60)
+EXPANDED = (368, 192)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "index.html")
@@ -48,12 +50,19 @@ class Api:
     def _window(self):
         return webview.windows[0] if webview.windows else None
 
-    def expand(self):
-        if not set_size(*EXPANDED):
+    def expand(self, height=None):
+        # The page measures its own content and asks for exactly that height,
+        # so the panel hugs what is on it -- no slack band above or below.
+        h = int(height) if height else EXPANDED[1]
+        h = max(110, min(430, h))
+        if not set_size(EXPANDED[0], h):
             win = self._window()
             if win:
-                win.resize(*EXPANDED)
-        fade_alpha(ACTIVE_ALPHA)
+                win.resize(EXPANDED[0], h)
+        # Snap to full ink on hover -- easing here reads as lag. The gentle
+        # fade is saved for settling back to idle.
+        _fade_gen[0] += 1              # abandon any fade in flight
+        set_alpha(ACTIVE_ALPHA)
 
     def collapse(self):
         if not set_size(*COLLAPSED):
@@ -61,6 +70,13 @@ class Api:
             if win:
                 win.resize(*COLLAPSED)
         fade_alpha(IDLE_ALPHA)
+
+    def quit(self):
+        # The daemon is going down and told us so; take the window with
+        # it. destroy() ends webview.start(), and the process exits.
+        win = self._window()
+        if win:
+            win.destroy()
 
     # The page owns the when (it is the one watching playback state); Python
     # owns the how, because a web page cannot fade an OS window.
@@ -102,11 +118,12 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
-# Layered alpha dims everything, text included, so the open panel is fully
-# opaque -- a see-through title over a busy desktop is unreadable. Collapsed
-# there is nothing but album art, which is exactly where translucency belongs.
-ACTIVE_ALPHA = 255
-IDLE_ALPHA = 140
+# Layered alpha dims everything, text included, so the open panel stays close
+# to opaque -- just translucent enough to feel like glass without the title
+# going unreadable over a busy desktop. The collapsed cover keeps most of its
+# ink so the art reads at a glance.
+ACTIVE_ALPHA = 238
+IDLE_ALPHA = 190
 
 _hwnd = None                    # found once, reused for every alpha change
 
@@ -345,12 +362,22 @@ def set_size(width, height):
     pywebview's resize() goes through WinForms, which refuses to go below its
     own minimum tracking width -- ask for 72 wide and you get 232. SetWindowPos
     talks to the window manager directly and is not second-guessed.
+
+    COLLAPSED/EXPANDED are in CSS (logical) pixels but SetWindowPos wants
+    physical ones, so scale by the window's DPI. Unscaled, a 200% display
+    gives the page half its design width and the open panel folds over
+    itself: truncated title, transport sitting on the mood chip.
     """
     if not _hwnd:
         return False
     try:
+        try:
+            scale = (ctypes.windll.user32.GetDpiForWindow(_hwnd) or 96) / 96.0
+        except Exception:
+            scale = 1.0
         ctypes.windll.user32.SetWindowPos(
-            _hwnd, 0, 0, 0, int(width), int(height),
+            _hwnd, 0, 0, 0,
+            int(round(width * scale)), int(round(height * scale)),
             SWP_NOMOVE | SWP_NOACTIVATE)
         return True
     except Exception:
@@ -388,7 +415,7 @@ def fade_alpha(target, duration=0.15, floor=40):
         key = ctypes.wintypes.DWORD()
         alpha = ctypes.c_ubyte()
         flags = ctypes.wintypes.DWORD()
-        start = target
+        start = None
         try:
             if user32.GetLayeredWindowAttributes(
                     _hwnd, ctypes.byref(key), ctypes.byref(alpha),
@@ -396,6 +423,11 @@ def fade_alpha(target, duration=0.15, floor=40):
                 start = alpha.value
         except Exception:
             pass
+        if start is None:
+            # No readable starting point: snap rather than silently doing
+            # nothing, or the window sticks at whatever alpha it last had.
+            set_alpha(target)
+            return
         if start == target:
             return
         steps = 8

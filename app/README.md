@@ -17,7 +17,7 @@ tests/       161 tests, browser mocked
 
 ## Running it
 
-Three things, in this order.
+Two one-time steps, then it lives in the toolbar.
 
 **1. The extension**, once. `edge://extensions` (or `chrome://extensions`) →
 Developer mode → **Load unpacked** → pick `app/extension`. Then open
@@ -27,19 +27,27 @@ Allow autoplay for the site, or playback stops between tracks: click the icon
 left of the address bar → **Permissions for this site** → **Media autoplay** →
 **Allow**.
 
-**2. The daemon.**
+**2. The launcher**, once: run `app\host\register.ps1`. It registers the
+native messaging host that lets the browser start the DJ. No admin, all
+HKCU; re-run it if the folder ever moves.
+
+**From then on, the extension icon is the switch.** Click it and the
+launcher starts the daemon and the overlay -- no consoles, no desktop
+shortcut -- and the extension opens its own pinned Apple Music tab if none
+is there. The badge reads **ON** while the daemon is connected. Click again
+to stop: the music pauses, the overlay closes, the daemon exits, the badge
+clears. Clicking twice fast cannot start two daemons; the launcher checks
+the port first. An **ERR** badge means the host is not registered -- run
+step 2 and reload the extension.
+
+`app\start.cmd` still does the same launch from the desktop, when you want
+it without the browser round-trip. When something is wrong, run the pieces
+by hand to see the logs:
 
 ```
 cd app
 python -m daemon.main --verbose
-```
-
-**3. The overlay**, in a second terminal.
-
-```
-cd app
-pythonw -m overlay.app        # no console window
-python -m overlay.app         # with logs, when something is wrong
+python -m overlay.app         # second terminal
 ```
 
 Useful flags: `--no-claude` picks from the profile only; `--solid` and

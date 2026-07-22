@@ -126,6 +126,68 @@ def rated_in_mood(ratings, mood, stars):
     return out
 
 
+# ----------------------------------------------------------------- signals
+#
+# What they do is a rating they never typed: skipping a song ten seconds in
+# says more than any star, and letting one play to the end is a quiet nod.
+# Withholding stars says nothing at all -- unrated stays strictly neutral,
+# and only repeated early skips ever count against a track.
+
+EARLY_SKIP_FRACTION = 0.4     # skipped before 40% through counts as a verdict
+EARLY_SKIP_STRIKES = 2        # how many early skips before we stop offering it
+
+
+def record_signal(signals, track, mood, kind, position_ms, duration_ms, now):
+    """Fold one listen outcome into the signals store. kind: skip|complete."""
+    cid = str((track or {}).get("catalogId") or "")
+    if not cid or not mood:
+        return signals
+    signals = dict(signals or {})
+    entry = dict(signals.get(cid) or {})
+    entry["title"] = track.get("title") or entry.get("title")
+    entry["artist"] = track.get("artist") or entry.get("artist")
+    by_mood = dict(entry.get("byMood") or {})
+    m = dict(by_mood.get(mood) or {"skips": 0, "earlySkips": 0, "completes": 0})
+    if kind == "complete":
+        m["completes"] = m.get("completes", 0) + 1
+    else:
+        m["skips"] = m.get("skips", 0) + 1
+        if duration_ms and (position_ms or 0) / duration_ms < EARLY_SKIP_FRACTION:
+            m["earlySkips"] = m.get("earlySkips", 0) + 1
+    m["lastAt"] = now
+    by_mood[mood] = m
+    entry["byMood"] = by_mood
+    signals[cid] = entry
+    return signals
+
+
+def skip_shunned(signals, mood):
+    """Ids skipped early often enough to stop offering in this mood.
+
+    A track they also let play to the end keeps its chances -- one bad moment
+    is not a verdict when there are full listens on record.
+    """
+    out = set()
+    for cid, entry in (signals or {}).items():
+        m = ((entry or {}).get("byMood") or {}).get(mood) or {}
+        if m.get("earlySkips", 0) >= EARLY_SKIP_STRIKES \
+                and not m.get("completes", 0):
+            out.add(str(cid))
+    return out
+
+
+def often_skipped(signals, mood, limit=10):
+    """Human-readable list of what they keep skipping, for the advisor."""
+    rows = []
+    for entry in (signals or {}).values():
+        m = ((entry or {}).get("byMood") or {}).get(mood) or {}
+        if m.get("earlySkips", 0) >= 1 and entry.get("title"):
+            rows.append((m.get("earlySkips", 0),
+                         "%s — %s" % (entry["title"], entry.get("artist"))))
+    rows.sort(reverse=True)
+    return [name for _n, name in rows[:limit]]
+
+
 def banned_ids(ratings, mood):
     """One star in this mood means don't play it in this mood again."""
     return {cid for cid, entry in (ratings or {}).items()

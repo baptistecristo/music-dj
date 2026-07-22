@@ -39,6 +39,8 @@ class FakeTransport:
         self.playlist_tracks = []
         self.playlists = []
         self.fail_list = False
+        self.ttml = None
+        self.additions = []
         self.counter = 0
 
     async def call(self, cmd, timeout=None):
@@ -70,6 +72,10 @@ class FakeTransport:
             if self.fail_list:
                 return {"error": "no tab"}
             return {"playlists": list(self.playlists)}
+        if kind == "lyrics":
+            return {"ttml": self.ttml}
+        if kind == "recentlyAdded":
+            return {"items": list(self.additions)}
         return {"ok": True}
 
     def sent(self, kind):
@@ -288,6 +294,9 @@ async def test_a_mood_drift_lets_the_current_song_finish():
 async def test_the_next_track_comes_from_the_new_lane():
     dj = make_dj()
     await dj.play_next()
+    # Mirror the hook: the state file moves first, set_mood follows it. The
+    # boundary re-read trusts the file, so the two must agree.
+    store.write_json(store.STATE, {"current_mood": "writing"})
     await dj.set_mood("writing")
     dj.tx.calls.clear()
     await dj.on_event({"evt": "trackEnded", "catalogId": dj.current["catalogId"]})
@@ -722,6 +731,156 @@ async def test_rating_with_nothing_playing_is_harmless():
     await dj.on_action({"action": "rate", "stars": 5})   # must not raise
 
 
+# --------------------------------------------------------------- signals
+
+@pytest.mark.asyncio
+async def test_an_early_skip_is_recorded_as_a_verdict():
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.current["position"] = 15000
+    dj.current["duration"] = 200000
+    await dj.on_action({"action": "skip"})
+    m = store.read_json(store.SIGNALS, {})[track["catalogId"]]["byMood"]["coding"]
+    assert m["skips"] == 1 and m["earlySkips"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_late_skip_is_not_held_against_the_track():
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.current["position"] = 180000
+    dj.current["duration"] = 200000
+    await dj.on_action({"action": "skip"})
+    m = store.read_json(store.SIGNALS, {})[track["catalogId"]]["byMood"]["coding"]
+    assert m["skips"] == 1 and m["earlySkips"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_full_listen_is_recorded_on_track_end():
+    dj = make_dj()
+    track = await dj.play_next()
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"]})
+    m = store.read_json(store.SIGNALS, {})[track["catalogId"]]["byMood"]["coding"]
+    assert m["completes"] == 1
+
+
+def test_two_early_skips_shun_a_track_but_a_full_listen_redeems_it():
+    signals = {}
+    track = {"catalogId": "c1", "title": "T", "artist": "A"}
+    for _ in range(2):
+        signals = library.record_signal(signals, track, "coding", "skip",
+                                        10000, 200000, 1000)
+    assert "c1" in library.skip_shunned(signals, "coding")
+    assert "c1" not in library.skip_shunned(signals, "writing")   # per-mood
+    signals = library.record_signal(signals, track, "coding", "complete",
+                                    200000, 200000, 1000)
+    assert "c1" not in library.skip_shunned(signals, "coding")
+
+
+def test_no_stars_is_neutral_not_negative():
+    # A track with no rating and no skips must never be shunned or banned.
+    assert library.skip_shunned({}, "coding") == set()
+    assert library.banned_ids({}, "coding") == set()
+
+
+@pytest.mark.asyncio
+async def test_the_mood_is_reread_at_each_song_boundary():
+    dj = make_dj()
+    track = await dj.play_next()
+    store.write_json(store.STATE, {"current_mood": "writing"})
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"]})
+    assert dj.mood == "writing"
+    assert dj.current is not None            # music kept going in the new mood
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_mood_survives_the_song_boundary():
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.pinned = True
+    store.write_json(store.STATE, {"current_mood": "writing"})
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"]})
+    assert dj.mood == "coding"
+
+
+@pytest.mark.asyncio
+async def test_songs_already_in_their_playlists_are_not_offered():
+    dj = make_dj()
+    dj.avoid_ids = {"cat1"}          # first search hit is already curated
+    track = await dj.play_next()
+    assert track["catalogId"] != "cat1"
+
+
+@pytest.mark.asyncio
+async def test_ready_learns_which_tracks_their_playlists_hold():
+    tx = FakeTransport()
+    tx.additions = [{"type": "album", "name": "New", "artist": "Someone"}]
+    tx.playlists = BANGERS
+    tx.playlist_tracks = ["cat9"]
+    dj = make_dj(tx)
+    await dj.on_event({"evt": "ready"})
+    await asyncio.sleep(0.05)
+    assert "cat9" in dj.avoid_ids
+    assert "cat9" in store.read_json(store.PLAYLIST_TRACKS, {})["ids"]
+
+
+@pytest.mark.asyncio
+async def test_ready_refreshes_the_library_view_once():
+    tx = FakeTransport()
+    tx.additions = [{"type": "album", "name": "New Album", "artist": "Someone"}]
+    dj = make_dj(tx)
+    await dj.on_event({"evt": "ready"})
+    await asyncio.sleep(0.05)
+    snap = store.read_json(store.LIBRARY_RECENT, {})
+    assert snap["items"] == tx.additions
+    await dj.on_event({"evt": "ready"})      # a reload later
+    await asyncio.sleep(0.05)
+    assert len(tx.sent("recentlyAdded")) == 1
+
+
+# ---------------------------------------------------------------- lyrics
+
+@pytest.mark.asyncio
+async def test_lyrics_are_fetched_for_the_current_track_and_cached():
+    tx = FakeTransport()
+    tx.ttml = "<tt><body><p begin='1s'>la la</p></body></tt>"
+    dj = make_dj(tx)
+    track = await dj.play_next()
+    await dj.on_action({"action": "lyrics"})
+    assert dj.ui_state()["lyrics"] == {"catalogId": track["catalogId"],
+                                       "ttml": tx.ttml}
+    await dj.on_action({"action": "lyrics"})       # second ask hits the cache
+    assert len(tx.sent("lyrics")) == 1
+
+
+@pytest.mark.asyncio
+async def test_lyrics_are_dropped_when_the_track_changes():
+    tx = FakeTransport()
+    tx.ttml = "<tt><body><p>words</p></body></tt>"
+    dj = make_dj(tx)
+    await dj.play_next()
+    await dj.on_action({"action": "lyrics"})
+    await dj.play_next()
+    assert dj.ui_state()["lyrics"] is None
+
+
+@pytest.mark.asyncio
+async def test_lyrics_with_nothing_playing_is_harmless():
+    dj = make_dj()
+    await dj.on_action({"action": "lyrics"})       # must not raise
+    assert dj.ui_state()["lyrics"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_track_without_lyrics_still_answers():
+    tx = FakeTransport()                            # ttml stays None
+    dj = make_dj(tx)
+    track = await dj.play_next()
+    await dj.on_action({"action": "lyrics"})
+    assert dj.ui_state()["lyrics"] == {"catalogId": track["catalogId"],
+                                       "ttml": None}
+
+
 # ----------------------------------------------------------------- ui push
 
 @pytest.mark.asyncio
@@ -805,3 +964,31 @@ async def test_a_mood_change_during_a_refill_is_not_dropped():
     await inflight
     assert dj.queue["mood"] == "debugging", "a stale refill overwrote the new mood"
     assert library.queue_tracks(dj.queue), "queue left empty after the mood change"
+
+
+# ------------------------------------------------------------------ shutdown
+
+
+async def test_shutdown_event_pauses_broadcasts_and_sets_event():
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    dj.playing = True
+    seen = []
+    dj.subscribe(seen.append)
+
+    await dj.on_event({"evt": "shutdown"})
+
+    assert {"cmd": "pause"} in tx.calls
+    assert {"shutdown": True} in seen
+    assert dj.shutdown_event.is_set()
+
+
+async def test_shutdown_when_not_playing_skips_pause():
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    dj.playing = False
+
+    await dj.on_event({"evt": "shutdown"})
+
+    assert {"cmd": "pause"} not in tx.calls
+    assert dj.shutdown_event.is_set()
