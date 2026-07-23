@@ -20,10 +20,6 @@ def setup_logging(verbose):
     # update every second, so --verbose otherwise buries our own lines under
     # protocol chatter.
     logging.getLogger("websockets").setLevel(logging.WARNING)
-    # websockets logs every frame at DEBUG, and the player sends a position
-    # update every second, so --verbose otherwise buries our own lines under
-    # protocol chatter.
-    logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
 async def run(args):
@@ -45,14 +41,26 @@ async def run(args):
     runner = asyncio.ensure_future(asyncio.gather(
         srv.run(), dj.watch_state(), start_when_ready(dj)))
     stopper = asyncio.ensure_future(dj.shutdown_event.wait())
-    await asyncio.wait([runner, stopper],
-                       return_when=asyncio.FIRST_COMPLETED)
+    done, _ = await asyncio.wait([runner, stopper],
+                                 return_when=asyncio.FIRST_COMPLETED)
     runner.cancel()
     stopper.cancel()
+    # A crash (say, the port already in use) also lands here. Read the
+    # exception rather than dropping it, or the daemon dies silently with
+    # exit code 0 and nothing in the log to say why.
+    failed = False
+    for task in done:
+        exc = None if task.cancelled() else task.exception()
+        if exc is not None:
+            logging.getLogger("music-dj").error("daemon failed: %s", exc,
+                                                exc_info=exc)
+            failed = True
     # The shutdown broadcast to the overlay rides on tasks created just
     # before the event was set; give them a beat to flush.
     await asyncio.sleep(0.2)
     logging.getLogger("music-dj").info("daemon stopped")
+    if failed:
+        raise SystemExit(1)
 
 
 async def start_when_ready(dj, poll=3.0):

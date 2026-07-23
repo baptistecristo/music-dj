@@ -149,6 +149,33 @@ check("urgent mood allowed at 200s", sw and played[-1] == "Calm", msg)
 sw, msg = musicdj.maybe_switch("nonsense")
 check("unknown mood rejected", not sw)
 
+# --- evidence banked during the debounce window ---
+# A signal inside min_seconds_between_switches must not switch, but its
+# weight has to be recorded so the mood takes effect once the window expires
+# instead of restarting its count from zero.
+st = musicdj.load_state()
+st.update({"current_mood": "debugging", "last_switch": time.time(),
+           "mood_scores": {}})
+musicdj.save_state(st)
+sw, msg = musicdj.decide_switch("writing", weight=1.0)
+check("debounce window blocks the switch", not sw and "recently" in msg, msg)
+banked = musicdj.load_state().get("mood_scores", {}).get("writing", 0)
+check("debounce window banks the evidence", banked >= 1.0, banked)
+
+# --- state file hygiene ---
+# Writes go through a temp file + os.replace (parallel hook processes race),
+# and a completed switch must not carry keys from the retired counter design.
+st = musicdj.load_state()
+st.update({"current_mood": "coding", "last_switch": 0, "mood_scores": {},
+           "pending_mood": "stale", "pending_count": 9})
+musicdj.save_state(st)
+musicdj.decide_switch("debugging")  # urgent: switches, rewrites state
+st = musicdj.load_state()
+check("legacy pending_* keys dropped on switch",
+      "pending_mood" not in st and "pending_count" not in st, st)
+leftovers = [f for f in os.listdir(musicdj.CONFIG_DIR) if f.endswith(".tmp")]
+check("atomic writes leave no temp files", leftovers == [], leftovers)
+
 # --- weighted accumulation: mixed workflows converge instead of resetting ---
 st = musicdj.load_state()
 st.update({"current_mood": "research", "last_switch": 0, "mood_scores": {}})
@@ -235,7 +262,7 @@ musicdj.save_config(cfg)
 # --- MCP server handshake ---
 msgs = [
     {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-     "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+     "params": {"protocolVersion": "2025-03-26", "capabilities": {},
                 "clientInfo": {"name": "test", "version": "0"}}},
     {"jsonrpc": "2.0", "method": "notifications/initialized"},
     {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
@@ -256,6 +283,9 @@ by_id = {m.get("id"): m for m in lines}
 check("mcp: 5 responses", len(by_id) == 5, r.stdout[:300] + r.stderr[:300])
 check("mcp: initialize ok",
       by_id.get(1, {}).get("result", {}).get("serverInfo", {}).get("name") == "apple-music")
+check("mcp: initialize echoes client protocol version",
+      by_id.get(1, {}).get("result", {}).get("protocolVersion") == "2025-03-26",
+      by_id.get(1, {}).get("result", {}))
 tools = [t["name"] for t in by_id.get(2, {}).get("result", {}).get("tools", [])]
 check("mcp: 8 tools listed", len(tools) == 8, tools)
 status = json.loads(by_id.get(3, {}).get("result", {})["content"][0]["text"])

@@ -93,6 +93,15 @@ plugins/music-dj/             the plugin itself
   hooks/                      activity → mood classification (weighted + debounced)
   server/                     MCP server (config anywhere; AppleScript on macOS)
   lib/                        shared config/classifier/control library
+app/                          standalone Windows overlay app (see app/README.md)
+  extension/                  Chrome/Edge extension — the hands, inside music.apple.com
+  daemon/                     Python brain: mood, queue, ratings, Claude picking
+  overlay/                    pywebview mini player
+  host/                       native messaging host + launcher registration
+  tools/                      CLI driver + transport smoke test
+  tests/                      app test suite (browser mocked)
+tests/                        plugin test suite
+.github/workflows/            CI: plugin + app tests on 3 OSes, installer/manifest lint
 ```
 
 ## Privacy

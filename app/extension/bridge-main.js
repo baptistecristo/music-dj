@@ -20,9 +20,9 @@
   const IN = "music-dj:to-page";
   const API = "https://amp-api.music.apple.com";
 
-  // MusicKit playback states. Only 0-3 matter for our purposes, but 5/10 are
+  // MusicKit playback states. 1-3 are the ones we act on directly; 5/10 are
   // how a track signals it finished, which is what drives the queue.
-  const S_NONE = 0, S_LOADING = 1, S_PLAYING = 2, S_PAUSED = 3;
+  const S_LOADING = 1, S_PLAYING = 2, S_PAUSED = 3;
   const S_ENDED = 5, S_COMPLETED = 10;
 
   let mk = null;
@@ -92,6 +92,7 @@
       catalogId: (item.playParams && item.playParams.catalogId) || item.id || null,
       title: attrs.name || item.title || null,
       artist: attrs.artistName || item.artistName || null,
+      album: attrs.albumName || null,
       artworkUrl: artworkUrl(attrs.artwork, 120),
       position: Math.round((mk.currentPlaybackTime || 0) * 1000),
       duration: attrs.durationInMillis ||
@@ -274,13 +275,19 @@
   // After a reload the page announces itself long before MusicKit exists, so a
   // command arriving in that window used to fail outright and the music stayed
   // dead. Wait for the instance instead of throwing at it.
+  //
+  // Whenever this acquires mk it also wires the listeners: the startup poll
+  // gives up after ~5 min (a tab parked on a sign-in page, say), and getting
+  // mk here without wiring meant playback worked but trackEnded never fired --
+  // the first track played and the music stopped forever. wire() is
+  // idempotent, so calling it from both places is safe.
   function awaitMk(ms) {
-    if (mk) return Promise.resolve(mk);
+    if (mk) { wire(); return Promise.resolve(mk); }
     return new Promise((resolve, reject) => {
       const deadline = Date.now() + (ms || 15000);
       const tick = setInterval(() => {
         if (!mk) mk = instance();
-        if (mk) { clearInterval(tick); resolve(mk); }
+        if (mk) { clearInterval(tick); wire(); resolve(mk); }
         else if (Date.now() > deadline) {
           clearInterval(tick);
           reject(new Error("MusicKit did not load in time"));
@@ -299,6 +306,7 @@
       case "resume":        ready(); kick(); return { ok: true, state: mk.playbackState };
       case "skip":          await ready().skipToNextItem(); return { ok: true };
       case "previous":      await ready().skipToPreviousItem(); return { ok: true };
+      case "seek":          await ready().seekToTime(Number(msg.position) || 0); return { ok: true };
       case "lyrics":        return await lyrics(msg.catalogId);
       case "recentlyAdded": return await recentlyAdded();
       case "listPlaylists": return await listPlaylists();
@@ -372,8 +380,12 @@
     pushPlayback();
   }
 
+  let wired = false;
+
   function wire() {
     if (!mk) return false;
+    if (wired) return true;      // listening twice would double every event
+    wired = true;
     const on = (name, fn) => { try { mk.addEventListener(name, fn); } catch (_) {} };
     on("playbackStateDidChange", onStateChange);
     on("nowPlayingItemDidChange", onItemChange);
@@ -393,10 +405,17 @@
     const want = "DJ";
     const apply = () => { if (document.title !== want) document.title = want; };
     apply();
+    // One observer for the title node, re-pointed only when the node itself is
+    // replaced. A fresh observer per head mutation piled up without bound in a
+    // tab that runs all day.
+    const titleObserver = new MutationObserver(apply);
+    let titleEl = null;
     const observe = () => {
       const el = document.querySelector("title");
-      if (!el) return;
-      new MutationObserver(apply).observe(el, { childList: true, characterData: true, subtree: true });
+      if (!el || el === titleEl) return;
+      titleEl = el;
+      titleObserver.disconnect();
+      titleObserver.observe(el, { childList: true, characterData: true, subtree: true });
     };
     observe();
     if (document.head) {

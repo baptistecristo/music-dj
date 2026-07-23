@@ -7,7 +7,7 @@
     {
       "name": "music-dj",
       "source": "./plugins/music-dj",
-      "description": "A context-aware DJ for Claude: learns your music taste from your library, reads your mood from how you write, and plays matching music (Apple Music, Spotify, SoundCloud, YouTube Music)."
+      "description": "A context-aware DJ for Claude: learns your music taste from your library, reads your mood from how you write, and plays matching music (Apple Music, Spotify, SoundCloud, YouTube Music, Deezer, Tidal, Amazon Music, Qobuz, Bandcamp, Pandora)."
     }
   ]
 }

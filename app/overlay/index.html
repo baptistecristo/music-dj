@@ -168,6 +168,26 @@
     text-overflow: ellipsis;
   }
 
+  /* ----------------------------------------------------------- the why-line
+
+     The reason this track was picked -- the daemon sends it with every state
+     push, and it is the one line no other now-playing widget could show. */
+
+  #why {
+    margin-top: 8px;
+    padding-left: 8px;
+    border-left: 2px solid var(--gold);
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 0 auto;
+  }
+
+  #why:empty { display: none; }
+
   /* ---------------------------------------------------------- the scrubber */
 
   #prow {
@@ -197,7 +217,11 @@
     border-radius: 2px;
     background: rgba(255,255,255,.16);
     overflow: hidden;
+    /* Clickable: a click seeks to that point in the track. */
+    cursor: pointer;
   }
+
+  #progress:hover { background: rgba(255,255,255,.24); }
 
   #bar {
     display: block;
@@ -490,9 +514,12 @@
     </div>
   </div>
 
+  <div id="why" class="panel pywebview-drag-region"></div>
+
   <div id="prow" class="panel pywebview-drag-region">
     <span id="elapsed" class="clock pywebview-drag-region">0:00</span>
-    <div id="progress" class="pywebview-drag-region"><i id="bar"></i></div>
+    <!-- Not a drag region: a click here is a seek, not a window move. -->
+    <div id="progress"><i id="bar"></i></div>
     <span id="remain" class="clock pywebview-drag-region">-0:00</span>
   </div>
 
@@ -542,6 +569,8 @@ let setupKey = null;        // what the picker was last built from
 let lyricsOpen = false;     // the user's toggle, kept across tracks
 let lyricsFor = null;       // catalogId the pane is currently built for
 let lyricsAsked = null;     // catalogId last requested, to ask only once
+let lyricsAskedAt = 0;      // when, so a request that never lands can retry
+let lyricsStalled = false;  // at least one retry: stop promising, say so
 let lyricsLines = [];       // [{t: ms|null, el: node}]
 let lastFit = 0;            // last height asked of the window
 let veiled = false;         // window faded out because playback is paused
@@ -573,6 +602,11 @@ function render() {
     el("sub").textContent = !socketUp ? "Start it in your terminal"
       : (state && state.connected) ? "" : "Open music.apple.com";
   }
+
+  // Why this track was picked -- the line that makes this a DJ rather than a
+  // now-playing widget. :empty hides the gold rule when there is no reason,
+  // and the guidance states above need no reason either.
+  el("why").textContent = (np && np.title && state && state.why) || "";
 
   el("art").src = (np && np.artworkUrl) ||
     "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
@@ -719,10 +753,22 @@ function renderLyrics() {
   box.classList.add("show");
 
   const have = state && state.lyrics;   // {catalogId, ttml|null} or null
-  // A new song wipes the daemon's cache; if the pane is open, chase it.
-  if (!have && np.catalogId && lyricsAsked !== np.catalogId) {
-    lyricsAsked = np.catalogId;
-    send({action: "lyrics"});
+  // A new song wipes the daemon's cache; if the pane is open, chase it. A
+  // request that never lands -- fetch failed, reply lost, tab gone mid-call --
+  // used to pin "fetching" on screen forever, because lyricsAsked already
+  // matched and nothing ever asked again. Ask again after a decent wait
+  // instead; state pushes arrive every second, so the retry rides on those.
+  if (!have && np.catalogId) {
+    if (lyricsAsked !== np.catalogId) {
+      lyricsAsked = np.catalogId;
+      lyricsAskedAt = Date.now();
+      lyricsStalled = false;
+      send({action: "lyrics"});
+    } else if (Date.now() - lyricsAskedAt > 12000) {
+      lyricsAskedAt = Date.now();
+      lyricsStalled = true;
+      send({action: "lyrics"});
+    }
   }
   const key = have ? have.catalogId : null;
   if (key !== lyricsFor) {
@@ -751,6 +797,15 @@ function renderLyrics() {
       }
       box.scrollTop = 0;
     }
+  }
+
+  // The waiting line is updated in place rather than through the rebuild
+  // above -- key stays null across retries -- and once a retry has been
+  // needed it stops promising and says so.
+  if (!have && box.firstElementChild) {
+    box.firstElementChild.textContent = lyricsStalled
+      ? "lyrics unavailable — will retry"
+      : "fetching lyrics…";
   }
 
   // Follow the song: light the line the playhead is in and keep it centred.
@@ -913,6 +968,19 @@ el("transport").addEventListener("click", (e) => {
   } else {
     send({action: act});
   }
+});
+
+// Click-to-seek. position/duration in state are milliseconds; the daemon's
+// seek action speaks seconds.
+el("progress").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const np = state && state.nowPlaying;
+  const dur = (np && np.duration) || 0;
+  if (!dur) return;
+  const rect = el("progress").getBoundingClientRect();
+  if (!rect.width) return;
+  const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  send({action: "seek", position: (frac * dur) / 1000});
 });
 
 el("chip").addEventListener("click", (e) => {

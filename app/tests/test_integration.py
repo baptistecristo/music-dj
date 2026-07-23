@@ -17,6 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import core, server, store  # noqa: E402
 
+# Mark every async test explicitly instead of relying on pytest.ini's
+# asyncio_mode = auto: run from a rootdir that misses that ini, bare async
+# tests silently error out instead of running.
+pytestmark = pytest.mark.asyncio
+
 PROFILE = """
 ## Mood → seed directions
 

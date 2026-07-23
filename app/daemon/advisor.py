@@ -13,6 +13,7 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 import time
 
 from . import library, picker, store
@@ -142,16 +143,33 @@ def _run_cli(prompt, timeout):
     exe = shutil.which("claude")
     if not exe:
         raise FileNotFoundError("claude")
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [exe, "-p"],
-        input=prompt,
-        capture_output=True, text=True, timeout=timeout,
-        encoding="utf-8", errors="replace",
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
     )
-    if result.returncode != 0:
-        log.info("claude exited %s; picking from the profile", result.returncode)
+    try:
+        stdout, _ = proc.communicate(prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # subprocess.run's own cleanup is not enough here: on Windows the
+        # .CMD shim means kill() only reaches cmd.exe, the node child keeps
+        # the pipe handles open, and the final communicate() blocks forever
+        # -- taking the refill lock with it. Kill the whole tree first.
+        _kill_tree(proc)
+        proc.communicate()
+        raise
+    if proc.returncode != 0:
+        log.info("claude exited %s; picking from the profile", proc.returncode)
         return None
-    return result.stdout
+    return stdout
+
+
+def _kill_tree(proc):
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True)
+    else:
+        proc.kill()                  # no shim on POSIX; this is the tree
 
 
 def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,

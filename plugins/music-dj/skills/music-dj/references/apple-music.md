@@ -55,10 +55,13 @@ const H = {Authorization: "Bearer " + mk.developerToken, "Music-User-Token": mk.
 const sf = mk.storefrontId || "fr";
 const r = await fetch(`https://amp-api.music.apple.com/v1/catalog/${sf}/search?term=${encodeURIComponent("SEED SONG + ARTIST HERE")}&types=songs&limit=3`, {headers: H}).then(x => x.json());
 const song = r.results?.songs?.data?.[0];
+if (!song) JSON.stringify({error: "no results, try different search terms"});
+else {
 mk.autoplayEnabled = true;               // Apple continues with similar songs
 await mk.setQueue({song: song.id});
 mk.play();                                // do NOT await
-JSON.stringify({queued: song?.attributes?.name + " — " + song?.attributes?.artistName});
+JSON.stringify({queued: song.attributes?.name + " — " + song.attributes?.artistName});
+}
 ```
 
 Then poll the status snippet after ~3s to confirm `state: 2`.

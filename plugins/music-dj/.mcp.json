@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "apple-music": {
-      "command": "python3",
+      "command": "${MUSIC_DJ_PYTHON:-python3}",
       "args": ["${CLAUDE_PLUGIN_ROOT}/server/apple_music_mcp.py"]
     }
   }

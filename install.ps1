@@ -34,7 +34,10 @@ for ($i = 0; $i -lt $services.Count; $i++) {
 Write-Host ""
 do {
     $choice = Read-Host "  Enter 1-$($services.Count)"
-} until ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $services.Count)
+    # [int64], not [int]: on PS 5.1 an answer over 10 digits makes the [int]
+    # cast throw inside the condition, which "Stop" turns fatal. [int64] keeps
+    # any \d+ answer a plain failed range check.
+} until ($choice -match '^\d+$' -and [int64]$choice -ge 1 -and [int64]$choice -le $services.Count)
 $service = $services[[int]$choice - 1]
 Write-Host ""
 Write-Host ("  -> {0} it is." -f $service.name) -ForegroundColor Green
@@ -59,7 +62,7 @@ for ($i = 0; $i -lt $browsers.Count; $i++) {
 Write-Host ""
 do {
     $bchoice = Read-Host "  Enter 1-$($browsers.Count)"
-} until ($bchoice -match '^\d+$' -and [int]$bchoice -ge 1 -and [int]$bchoice -le $browsers.Count)
+} until ($bchoice -match '^\d+$' -and [int64]$bchoice -ge 1 -and [int64]$bchoice -le $browsers.Count)
 $browser = $browsers[[int]$bchoice - 1]
 Write-Host ""
 Write-Host ("  -> DJ-ing in {0}." -f $browser.name) -ForegroundColor Green
@@ -69,7 +72,15 @@ $configDir = Join-Path $env:USERPROFILE ".music-dj"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 $configPath = Join-Path $configDir "config.json"
 if (Test-Path $configPath) {
-    $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+    # A corrupt or empty config from an earlier run should not kill a re-run
+    # under $ErrorActionPreference = "Stop" — fall back to a fresh default,
+    # same as install.sh's except clause.
+    try {
+        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($null -eq $cfg) { $cfg = [pscustomobject]@{ enabled = $true } }
+    } catch {
+        $cfg = [pscustomobject]@{ enabled = $true }
+    }
 } else {
     $cfg = [pscustomobject]@{ enabled = $true }
 }
@@ -108,6 +119,15 @@ if ($py3Ok) {
     Write-Host "    [ok] Python 3 found (python3)"
 } elseif ($pyOk) {
     Write-Host "    [ok] Python 3 found (python) - the DJ's hooks will use it automatically"
+    # The hooks fall back with "python3 || python", but the plugin's MCP
+    # server can't: MCP commands are spawned without a shell. Its .mcp.json
+    # launches "${MUSIC_DJ_PYTHON:-python3}", so on a machine where python3
+    # is missing or the Store stub, point that variable at the real one.
+    $pyPath = (Get-Command python).Source
+    [Environment]::SetEnvironmentVariable("MUSIC_DJ_PYTHON", $pyPath, "User")
+    $env:MUSIC_DJ_PYTHON = $pyPath
+    Write-Host ("    [ok] MUSIC_DJ_PYTHON={0} saved (user env var; the plugin's MCP server uses it)" -f $pyPath)
+    Write-Host "         Restart Claude Code once so it picks the variable up."
 } else {
     Write-Host "    [!!] Python 3 not found (or 'python3' is the Microsoft Store stub)." -ForegroundColor Yellow
     Write-Host "         The mood-detection hooks need it. Install Python 3 from"

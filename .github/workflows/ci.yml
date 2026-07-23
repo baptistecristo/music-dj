@@ -33,6 +33,15 @@ jobs:
       - name: Run test suite
         run: python tests/test_music_dj.py
 
+      - name: Install app test dependencies
+        run: python -m pip install -r app/requirements-dev.txt
+
+      # Run from the repo root: pytest walks up from app/tests, finds
+      # app/pytest.ini, and takes app/ as rootdir — which is what the suite's
+      # sys.path setup expects.
+      - name: Run app test suite
+        run: python -m pytest app/tests -q
+
   lint-installers:
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +49,11 @@ jobs:
 
       - name: Check install.sh syntax
         run: bash -n install.sh
+
+      - name: Shellcheck install.sh
+        # bash -n only catches parse errors; shellcheck catches quoting and
+        # logic mistakes too. Preinstalled on ubuntu runners.
+        run: shellcheck install.sh
 
       - name: Check install.ps1 syntax
         shell: pwsh

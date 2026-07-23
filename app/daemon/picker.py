@@ -109,6 +109,8 @@ def choose_resolution(songs, exclude_ids=(), preferred_artist=None):
         want = preferred_artist.lower()
         for song in candidates:
             artist = (song.get("artist") or "").lower()
-            if want in artist or artist in want:
+            # A result with no artist must not "match" -- "" is a substring
+            # of everything.
+            if artist and (want in artist or artist in want):
                 return song
     return candidates[0]

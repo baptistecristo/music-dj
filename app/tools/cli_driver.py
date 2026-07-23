@@ -83,7 +83,13 @@ async def call(cmd: dict, timeout: float = 30.0):
     cmd = dict(cmd, id=mid)
     fut = asyncio.get_running_loop().create_future()
     pending[mid] = fut
-    await bridge.send(json.dumps(cmd))
+    try:
+        await bridge.send(json.dumps(cmd))
+    except Exception as exc:
+        # The socket can die between the connected-check and the send; the
+        # future must not be left pending forever.
+        pending.pop(mid, None)
+        return {"error": "send failed: %s" % exc}
     try:
         return await asyncio.wait_for(fut, timeout)
     except asyncio.TimeoutError:
@@ -151,16 +157,33 @@ async def repl():
         elif verb == "search":
             show(await call({"cmd": "search", "term": " ".join(args)}))
         elif verb == "play":
+            if not args:
+                out("!! usage: play <catalogId>")
+                continue
             show(await call({"cmd": "play", "catalogId": args[0]}, timeout=40))
         elif verb == "create":
             show(await call({"cmd": "createPlaylist", "name": " ".join(args)}))
         elif verb == "tracks":
+            if not args:
+                out("!! usage: tracks <playlistId>")
+                continue
             show(await call({"cmd": "playlistTracks", "playlistId": args[0]}, timeout=60))
         elif verb == "add":
+            if len(args) < 2:
+                out("!! usage: add <playlistId> <catalogId>")
+                continue
             show(await call({"cmd": "addToPlaylist",
                              "playlistId": args[0], "catalogId": args[1]}))
         elif verb == "raw":
-            show(await call(json.loads(line[4:])))
+            try:
+                cmd = json.loads(line[4:])
+            except ValueError:
+                out("!! raw wants JSON, e.g. raw {\"cmd\":\"status\"}")
+                continue
+            if not isinstance(cmd, dict):
+                out("!! raw wants a JSON object")
+                continue
+            show(await call(cmd))
         else:
             out("?? unknown: " + verb)
 

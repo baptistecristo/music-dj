@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .DS_Store
 .pytest_cache/
+# Local Claude Code artifacts: worktrees and per-machine settings.
+.claude/

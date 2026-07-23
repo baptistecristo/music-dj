@@ -1,0 +1,6 @@
+# What the app test suite needs beyond the standard library.
+# Install:  python -m pip install -r app/requirements-dev.txt
+pytest
+pytest-asyncio
+# >=13: the daemon imports websockets.asyncio.server, which older releases lack.
+websockets>=13

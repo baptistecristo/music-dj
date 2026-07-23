@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(
 import musicdj  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
+# Keep in sync with .claude-plugin/plugin.json and SKILL.md metadata.
+VERSION = "0.6.0"
 
 TOOLS = [
     {
@@ -85,7 +87,7 @@ TOOLS = [
                 "enabled": {"type": "boolean"},
                 "shuffle": {"type": "boolean"},
                 "min_seconds_between_switches": {"type": "integer"},
-                "confirmations_needed": {"type": "integer", "description": "Consecutive observations of a new mood before switching (urgent moods need only 1)"},
+                "confirmations_needed": {"type": "integer", "description": "Signal weight a new mood must accumulate (with decay) before switching: strong signals like edits or test runs count 1.0, failures 1.25, doc-glances 0.5. Default 2 ~= two solid observations. Urgent moods need only 1"},
                 "urgent_moods": {"type": "array", "items": {"type": "string", "enum": musicdj.MOODS}, "description": "Moods that switch fast (single observation, half the debounce window). Default: [\"debugging\"]"},
                 "pause_on_session_end": {"type": "boolean"},
                 "session_start_mood": {"type": "string"},
@@ -177,10 +179,15 @@ def main():
             continue  # notification, nothing to answer
 
         if method == "initialize":
+            # Per the MCP negotiation contract: echo the client's requested
+            # protocol version when it's one we can serve, otherwise answer
+            # with the latest version we support.
+            asked = (msg.get("params") or {}).get("protocolVersion")
+            proto = asked if isinstance(asked, str) and asked else PROTOCOL_VERSION
             reply(msg_id, {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": proto,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "apple-music", "version": "0.1.0"}
+                "serverInfo": {"name": "apple-music", "version": VERSION}
             })
         elif method == "tools/list":
             reply(msg_id, {"tools": TOOLS})

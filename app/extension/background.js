@@ -18,9 +18,41 @@ const log = (...a) => console.log("[music-dj]", ...a);
 
 // ------------------------------------------------------------------- the tab
 
+// Adoption has to outlive the worker: MV3 suspends it constantly, and coming
+// back with tabId null meant re-querying — which, with two Apple Music tabs
+// open, could flip adoption to the idle one and drop the playing tab's events.
+// Session storage lives exactly as long as the browser session, same as a tab.
+function adopt(id) {
+  tabId = id;
+  try {
+    chrome.storage.session.set({ tabId: id }).catch(() => {});
+  } catch (_) {}
+}
+
+const restored = (async () => {
+  try {
+    const saved = (await chrome.storage.session.get("tabId")).tabId;
+    if (saved == null || tabId != null) return;
+    await chrome.tabs.get(saved);    // throws if it closed while we slept
+    tabId = saved;
+  } catch (_) {}
+})();
+
+// Never clobber an adopted tab that is still alive; only re-query once it is
+// genuinely gone. Reconnects happen on every worker wake, so an unconditional
+// query here is exactly the adoption flip described above.
 async function findTab() {
+  await restored;
+  if (tabId != null) {
+    try {
+      await chrome.tabs.get(tabId);
+      return tabId;
+    } catch (_) {
+      adopt(null);
+    }
+  }
   const tabs = await chrome.tabs.query({ url: "https://music.apple.com/*" });
-  tabId = tabs.length ? tabs[0].id : null;
+  adopt(tabs.length ? tabs[0].id : null);
   return tabId;
 }
 
@@ -30,7 +62,7 @@ async function findTab() {
 async function openTab() {
   const tab = await chrome.tabs.create({
     url: "https://music.apple.com/", pinned: true, active: false });
-  tabId = tab.id;
+  adopt(tab.id);
   await new Promise((resolve) => {
     const done = (id, info) => {
       if (id === tab.id && info.status === "complete") {
@@ -59,14 +91,29 @@ async function inject(id) {
     target: { tabId: id }, files: ["bridge-iso.js"], world: "ISOLATED" });
 }
 
+// One find-or-open at a time. The daemon fires several commands concurrently
+// on first start; each seeing tabId null and opening its own pinned tab left
+// up to four music.apple.com tabs. All callers share the acquisition in
+// flight instead, so only one openTab can ever run.
+let acquiring = null;
+
+function acquireTab() {
+  if (acquiring) return acquiring;
+  acquiring = (async () => {
+    let id = await findTab();
+    if (id == null) {
+      id = await openTab();
+      await inject(id);
+      // The fresh page announces itself and MusicKit takes a moment to exist.
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return id;
+  })().finally(() => { acquiring = null; });
+  return acquiring;
+}
+
 async function toPage(payload) {
-  if (tabId == null) await findTab();
-  if (tabId == null) {
-    await openTab();
-    await inject(tabId);
-    // The fresh page announces itself and MusicKit takes a moment to exist.
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  await acquireTab();
   try {
     await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
     return;
@@ -77,8 +124,8 @@ async function toPage(payload) {
   // Either the tab id went stale (closed, navigated away) or the bridge was
   // never injected. Find the tab again -- opening one if it is gone --
   // inject, and retry once.
-  tabId = null;
-  if (!(await findTab())) await openTab();
+  adopt(null);
+  await acquireTab();
   try {
     await inject(tabId);
   } catch (e) {
@@ -113,9 +160,7 @@ function connect() {
     chrome.action.setBadgeText({ text: "ON" });
     backoff = 1000;
     log("connected to daemon");
-    findTab().then((id) => {
-      send({ evt: "bridgeUp", hasTab: id != null });
-    });
+    findTab();   // re-validate (or adopt) the DJ tab ahead of the first command
     clearInterval(keepaliveTimer);
     keepaliveTimer = setInterval(() => send({ evt: "keepalive" }), KEEPALIVE_MS);
   };
@@ -167,14 +212,14 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   // nothing to tell them apart. onRemoved clears tabId, so a closed tab
   // still hands over cleanly.
   if (msg.kind === "hello") {
-    if (sender.tab && tabId == null) tabId = sender.tab.id;
+    if (sender.tab && tabId == null) adopt(sender.tab.id);
     connect();
     send({ evt: "tabReady" });
     return false;
   }
   if (msg.kind === "fromPage") {
     if (sender.tab) {
-      if (tabId == null) tabId = sender.tab.id;
+      if (tabId == null) adopt(sender.tab.id);
       if (sender.tab.id !== tabId) return false;
     }
     send(msg.payload);
@@ -184,7 +229,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 
 chrome.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
-    tabId = null;
+    adopt(null);
     send({ evt: "tabGone" });
   }
 });
@@ -215,9 +260,10 @@ chrome.action.onClicked.addListener(async () => {
     backoff = 1000;
     connect();
   });
-  if (!(await findTab())) {
-    await openTab();
-    try { await inject(tabId); } catch (e) { log("inject after open:", e); }
+  try {
+    await acquireTab();
+  } catch (e) {
+    log("could not open the DJ tab:", e);
   }
 });
 

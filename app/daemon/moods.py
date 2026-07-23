@@ -14,7 +14,6 @@ profile stays the single source of musical truth.
 
 import re
 
-PLUGIN_MOODS = ["coding", "writing", "debugging", "building", "research"]
 LANES = ["energized", "tense", "focus", "mellow", "loose"]
 
 LANE_OF = {

@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import library, moods, picker  # noqa: E402
-from daemon.server import origin_allowed  # noqa: E402
+from daemon.server import bridge_origin_allowed, ui_origin_allowed  # noqa: E402
 
 
 # ------------------------------------------------------------------- origins
@@ -26,8 +26,8 @@ from daemon.server import origin_allowed  # noqa: E402
     None,                         # every non-browser client
     "",
 ])
-def test_the_daemon_accepts_its_own_clients(origin):
-    assert origin_allowed(origin) is True
+def test_the_ui_accepts_its_own_clients(origin):
+    assert ui_origin_allowed(origin) is True
 
 
 @pytest.mark.parametrize("origin", [
@@ -39,7 +39,40 @@ def test_the_daemon_accepts_its_own_clients(origin):
 def test_the_daemon_turns_away_web_pages(origin):
     # Browsers do not apply same-origin policy to WebSockets, so any page the
     # user has open could otherwise reach ws://127.0.0.1 and drive the music.
-    assert origin_allowed(origin) is False
+    assert ui_origin_allowed(origin) is False
+    assert bridge_origin_allowed(origin) is False
+
+
+@pytest.mark.parametrize("origin", [
+    "chrome-extension://cpoilmekfofffkmcblfelcdnndkbagom",
+    "moz-extension://abc",
+    None,                         # every non-browser client (the test driver)
+    "",
+])
+def test_the_bridge_accepts_extensions_and_tools(origin):
+    assert bridge_origin_allowed(origin) is True
+
+
+@pytest.mark.parametrize("origin", [
+    "http://127.0.0.1:27628",     # local pages may watch /ui, never drive /bridge
+    "http://localhost:5000",
+    "file:///C:/overlay/index.html",
+])
+def test_the_bridge_turns_away_local_pages(origin):
+    # Whoever holds /bridge answers every command and can shut the daemon
+    # down; only an extension (or a non-browser client) may be the transport.
+    assert bridge_origin_allowed(origin) is False
+
+
+def test_the_bridge_can_be_pinned_to_extension_ids():
+    ours = "chrome-extension://cpoilmekfofffkmcblfelcdnndkbagom"
+    other = "chrome-extension://aaaabbbbccccddddeeeeffffgggghhhh"
+    ids = ("cpoilmekfofffkmcblfelcdnndkbagom",)
+    assert bridge_origin_allowed(ours, ids) is True
+    assert bridge_origin_allowed(other, ids) is False
+    # An empty Origin can only be a non-browser client: browsers always send
+    # one for extensions, so pinning must not lock out the test driver.
+    assert bridge_origin_allowed(None, ids) is True
 
 
 PROFILE = """

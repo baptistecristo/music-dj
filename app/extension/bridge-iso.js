@@ -18,7 +18,11 @@
     const data = ev.data;
     if (!data || data.__musicdj !== FROM_PAGE || !data.payload) return;
     try {
-      chrome.runtime.sendMessage({ kind: "fromPage", payload: data.payload });
+      // sendMessage returns a promise in MV3; "receiving end does not exist"
+      // arrives as a rejection, not a throw, so it needs its own catch or it
+      // spams the console.
+      chrome.runtime.sendMessage({ kind: "fromPage", payload: data.payload })
+        .catch(() => {});
     } catch (_) {
       // Worker asleep or extension reloading — the daemon retries, so dropping
       // one message here is survivable.
@@ -36,5 +40,5 @@
 
   // Announce the tab on (re)injection so the worker knows where to send
   // commands after a reload.
-  try { chrome.runtime.sendMessage({ kind: "hello" }); } catch (_) {}
+  try { chrome.runtime.sendMessage({ kind: "hello" }).catch(() => {}); } catch (_) {}
 })();

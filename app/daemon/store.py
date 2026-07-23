@@ -10,8 +10,12 @@ Two rules, both learned the hard way on Windows:
 """
 
 import json
+import logging
 import os
 import tempfile
+import time
+
+log = logging.getLogger("music-dj")
 
 DIR = os.path.expanduser("~/.music-dj")
 
@@ -50,20 +54,37 @@ def read_text(name, default=""):
         return default
 
 
-def write_json(name, data):
-    """Temp file in the same directory, then os.replace -- atomic on Windows."""
+def write_json(name, data, attempts=3):
+    """Temp file in the same directory, then os.replace -- atomic on Windows.
+
+    The replace can hit a Windows sharing violation while a reader (the
+    plugin's hook, an editor, a scanner) briefly holds the target open, so it
+    gets a few short retries. Never raises: persisting is best-effort, and a
+    failed write only leaves the previous copy on disk, which every reader
+    already tolerates -- far better than taking down a play cycle over it.
+    Returns True when the file was written.
+    """
     os.makedirs(DIR, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=DIR, prefix=".tmp-" + name + "-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path(name))
+        for attempt in range(attempts):
+            try:
+                os.replace(tmp, path(name))
+                return True
+            except OSError:
+                if attempt + 1 == attempts:
+                    raise
+                time.sleep(0.05)
     except Exception:
+        log.warning("could not write %s; keeping the previous copy", name,
+                    exc_info=True)
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        raise
+        return False
 
 
 def mtime(name):

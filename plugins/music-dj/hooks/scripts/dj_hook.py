@@ -105,15 +105,25 @@ def main():
             cfg = musicdj.load_config()
             mood = cfg.get("session_start_mood") or ""
             if cfg.get("enabled", True) and mood:
-                if musicdj.is_macos():
+                # Same gate as handle_mood: native control only when Apple
+                # Music is the chosen service. A Mac user on Spotify runs the
+                # browser DJ, and force-playing Music.app here would also
+                # stamp current_mood/last_switch, muting real signals for the
+                # whole debounce window.
+                if (musicdj.is_macos()
+                        and cfg.get("service", "apple-music") == "apple-music"):
                     musicdj.maybe_switch(mood, force=True)
-                # Non-mac: no context emitted on session start — starting
-                # music unprompted every session would be intrusive.
+                # Non-mac / browser services: no context emitted on session
+                # start — starting music unprompted every session would be
+                # intrusive.
         elif event == "sessionend":
             cfg = musicdj.load_config()
             if (cfg.get("enabled", True)
                     and cfg.get("pause_on_session_end", False)
-                    and musicdj.is_macos()):
+                    and musicdj.is_macos()
+                    and cfg.get("service", "apple-music") == "apple-music"):
+                # Guarded by service too: 'tell app "Music" to pause' would
+                # *launch* Music.app for a browser-service user.
                 musicdj.pause()
     except Exception:
         pass
