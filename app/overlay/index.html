@@ -68,7 +68,7 @@
   /* Open, the panel leans darker so text stays readable, but keeps a little
      glass rather than going fully solid. */
   body.open #shell {
-    background: rgba(26, 26, 31, .86);
+    background: rgba(11, 11, 14, .93);
     backdrop-filter: blur(28px) saturate(160%);
   }
 
@@ -334,6 +334,11 @@
     overflow-y: auto;
     scroll-behavior: smooth;
     flex: 0 0 auto;
+    /* Positioned so the line divs' offsetTop is measured inside this box.
+       Without it their offsetParent is the panel, every offset carries the
+       ~200px of chrome above the pane, and the follow-the-song scroll
+       overshoots to the bottom and sticks there. */
+    position: relative;
   }
 
   #lyrics.show { display: block; }
@@ -343,12 +348,12 @@
     padding: 2px 0;
     font-size: 12.5px;
     line-height: 1.45;
-    color: var(--dim);
+    color: #c8c8d2;
     transition: color 200ms ease;
   }
 
-  #lyrics div.now { color: var(--text); font-weight: 600; }
-  #lyrics div.plain { color: var(--muted); }
+  #lyrics div.now { color: #ffffff; font-weight: 600; }
+  #lyrics div.plain { color: #c8c8d2; }
   #lyrics div.meta {
     font-family: var(--utility);
     font-size: 10px;

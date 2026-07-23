@@ -147,6 +147,11 @@ def _run_cli(prompt, timeout):
         [exe, "-p"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
+        # The daemon runs under pythonw (no console), so a console child
+        # spawned without this flag gets a brand-new console -- which Windows
+        # 11 opens as a visible Terminal window on every refill.
+        creationflags=(subprocess.CREATE_NO_WINDOW
+                       if sys.platform == "win32" else 0),
     )
     try:
         stdout, _ = proc.communicate(prompt, timeout=timeout)
@@ -167,7 +172,8 @@ def _run_cli(prompt, timeout):
 def _kill_tree(proc):
     if sys.platform == "win32":
         subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                       capture_output=True)
+                       capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
     else:
         proc.kill()                  # no shim on POSIX; this is the tree
 
