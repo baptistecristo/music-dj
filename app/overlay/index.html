@@ -6,9 +6,7 @@
   /* ------------------------------------------------------------------ tokens
      Collapsed, this is a record sleeve sitting on the desk: cover only.
      Hovered, it opens into an Apple Music-shaped mini player -- art and naming
-     on top, a full-width scrubber under it, transport centred below. The
-     why-line is the reason this exists rather than any other now-playing
-     widget, so it keeps its gold rule instead of being dropped for symmetry. */
+     on top, a full-width scrubber under it, transport centred below. */
 
   :root {
     --bg: #1b1b1f;
@@ -167,26 +165,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
-  /* ----------------------------------------------------------- the why-line
-
-     The reason this track was picked -- the daemon sends it with every state
-     push, and it is the one line no other now-playing widget could show. */
-
-  #why {
-    margin-top: 8px;
-    padding-left: 8px;
-    border-left: 2px solid var(--gold);
-    color: var(--muted);
-    font-size: 11px;
-    line-height: 1.35;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 0 0 auto;
-  }
-
-  #why:empty { display: none; }
 
   /* ---------------------------------------------------------- the scrubber */
 
@@ -514,8 +492,6 @@
     </div>
   </div>
 
-  <div id="why" class="panel pywebview-drag-region"></div>
-
   <div id="prow" class="panel pywebview-drag-region">
     <span id="elapsed" class="clock pywebview-drag-region">0:00</span>
     <!-- Not a drag region: a click here is a seek, not a window move. -->
@@ -602,11 +578,6 @@ function render() {
     el("sub").textContent = !socketUp ? "Start it in your terminal"
       : (state && state.connected) ? "" : "Open music.apple.com";
   }
-
-  // Why this track was picked -- the line that makes this a DJ rather than a
-  // now-playing widget. :empty hides the gold rule when there is no reason,
-  // and the guidance states above need no reason either.
-  el("why").textContent = (np && np.title && state && state.why) || "";
 
   el("art").src = (np && np.artworkUrl) ||
     "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";

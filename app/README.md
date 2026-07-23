@@ -62,7 +62,7 @@ curating is the point.
 
 **Picks come from Claude**, prompted with your taste profile, the current mood,
 recent plays, and the tracks you rated 5 and 1 star *in that mood*. Each pick
-carries the reason Claude gave, and the overlay shows it verbatim. The taste
+carries the reason Claude gave (kept in the queue data, not shown). The taste
 profile is the floor underneath: a missing CLI, a timeout or an unparseable
 answer all fall through to it, so the music never stops because the model was
 unhelpful.
