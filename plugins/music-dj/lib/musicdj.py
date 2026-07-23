@@ -87,11 +87,28 @@ def load_config():
     return merged
 
 
+def _write_json_atomic(path, obj, indent=None):
+    # Hooks run as one process per tool call and Claude Code issues tool calls
+    # in parallel, so writers race each other and readers can catch a write
+    # mid-flight. Write to a per-process temp file and os.replace() it in:
+    # readers then see either the old or the new file, never a torn one.
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=indent)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 def save_config(cfg):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+        _write_json_atomic(CONFIG_PATH, cfg, indent=2)
     except Exception:
         pass
 
@@ -107,8 +124,7 @@ def load_state():
 def save_state(st):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(st, f)
+        _write_json_atomic(STATE_PATH, st)
     except Exception:
         pass
 
@@ -398,10 +414,14 @@ def decide_switch(mood, force=False, weight=1.0):
         min_wait = float(cfg.get("min_seconds_between_switches", 300))
         if urgent:
             min_wait /= 2
-        if now - st.get("last_switch", 0) < min_wait:
-            return False, "switched too recently"
         scores[mood] = scores.get(mood, 0.0) + weight
         st.update({"mood_scores": scores, "last_signal": now})
+        if now - st.get("last_switch", 0) < min_wait:
+            # Still refuse to switch, but bank the evidence: a mood that holds
+            # through the window then takes effect as soon as it expires,
+            # instead of starting its count from zero.
+            save_state(st)
+            return False, "switched too recently"
         need = 1.0 if urgent else float(cfg.get("confirmations_needed", 2))
         rival = max((v for m, v in scores.items() if m != mood), default=0.0)
         # 0.1 tolerance: confirmations arriving within ~a minute of each
@@ -411,7 +431,11 @@ def decide_switch(mood, force=False, weight=1.0):
             return False, "mood %s pending (%.1f/%.1f)" % (mood, scores[mood], need)
 
     st.update({"current_mood": mood, "last_switch": now, "mood_scores": {},
-               "last_signal": now, "pending_mood": None, "pending_count": 0})
+               "last_signal": now})
+    # Drop leftovers from the old consecutive-counter design so stale state
+    # files stop carrying keys nothing reads.
+    st.pop("pending_mood", None)
+    st.pop("pending_count", None)
     save_state(st)
     return True, "switch to mood %s" % mood
 

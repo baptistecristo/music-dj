@@ -12,7 +12,7 @@ extension/   Chrome/Edge extension -- the hands, inside music.apple.com
 daemon/      Python -- the brain: mood, queue, history, ratings, Claude picking
 overlay/     pywebview mini player
 tools/       throwaway CLI driver + transport smoke test
-tests/       161 tests, browser mocked
+tests/       the test suite, browser mocked
 ```
 
 ## Running it
@@ -96,8 +96,9 @@ docs wants the same low-vocal register as coding.
 ## Tests
 
 ```
-python -m pytest tests/ -q      # 168 passing
-python tools/transport_smoke.py # transport, with a mock extension
+python -m pip install -r requirements-dev.txt   # test deps, once
+python -m pytest tests/ -q                      # the full suite; all should pass
+python tools/transport_smoke.py                 # transport, with a mock extension
 ```
 
 They mock the extension, so they prove the daemon's logic -- mood mapping,

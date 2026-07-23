@@ -5,6 +5,19 @@ set -e
 echo ""
 echo "  MUSIC DJ — your AI DJ: it learns your taste, reads your mood, plays the music."
 echo ""
+
+# The config is written by a Python heredoc below; find an interpreter up
+# front so a missing Python fails here, not after both prompts are answered.
+if command -v python3 >/dev/null 2>&1; then
+    py=python3
+elif command -v python >/dev/null 2>&1; then
+    py=python
+else
+    echo "  Python 3 is required (it writes the config, and the DJ's hooks use it)."
+    echo "  Install it from https://www.python.org/downloads/ and re-run this installer."
+    exit 1
+fi
+
 echo "  Which music service do you use?"
 
 services=(apple-music spotify soundcloud youtube-music deezer tidal amazon-music qobuz bandcamp pandora)
@@ -43,7 +56,7 @@ echo "  -> DJ-ing in ${bnames[$bidx]}."
 
 mkdir -p "$HOME/.music-dj"
 config="$HOME/.music-dj/config.json"
-python3 - "$service" "$browser" "$config" <<'EOF'
+"$py" - "$service" "$browser" "$config" <<'EOF'
 import json, sys
 service, browser, path = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
@@ -57,6 +70,18 @@ cfg["browser_device_id"] = ""
 json.dump(cfg, open(path, "w"), indent=2)
 EOF
 echo "  Saved your choice to $config"
+
+# The hooks fall back with "python3 || python", but the plugin's MCP server
+# can't: MCP commands are spawned without a shell. Its .mcp.json launches
+# "${MUSIC_DJ_PYTHON:-python3}", so when only "python" exists, tell the user
+# how to point the server at it (persisting env vars from a script is too
+# shell-specific to do silently).
+if [ "$py" = "python" ]; then
+    echo ""
+    echo "  Note: 'python3' was not found, and the plugin's MCP server defaults to it."
+    echo "  Add this to your shell profile so the server uses your interpreter:"
+    echo "    export MUSIC_DJ_PYTHON=\"$(command -v python)\""
+fi
 
 echo ""
 if command -v claude >/dev/null 2>&1; then

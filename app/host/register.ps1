@@ -5,7 +5,22 @@ param([string]$ExtensionId = "leecnmkgmigdljlikhekgionlokgobna")
 $ErrorActionPreference = "Stop"
 
 $hostDir = $PSScriptRoot
-$python  = (Get-Command python).Source
+# Get-Command alone is not proof of Python: with none installed, Windows
+# still resolves "python" to the Microsoft Store alias stub. Only trust an
+# interpreter that actually answers --version (same check as install.ps1).
+$python = $null
+foreach ($name in "python", "python3") {
+    try {
+        $v = & $name --version 2>$null
+        if ($LASTEXITCODE -eq 0 -and "$v" -match "^Python 3") {
+            $python = (Get-Command $name).Source
+            break
+        }
+    } catch {}
+}
+if (-not $python) {
+    throw "Python 3 not found on PATH (or only the Store stub). Install it, then re-run."
+}
 
 $bat = Join-Path $hostDir "launcher.bat"
 "@echo off`r`n`"$python`" `"$hostDir\launcher.py`"" |

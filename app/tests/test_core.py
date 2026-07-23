@@ -764,6 +764,68 @@ async def test_a_full_listen_is_recorded_on_track_end():
     assert m["completes"] == 1
 
 
+@pytest.mark.asyncio
+async def test_the_new_tracks_early_events_are_not_a_user_skip():
+    # Confirming a play takes seconds, and the commanded track's first
+    # playback events can beat the reply. `current` still names the outgoing
+    # track then; those events used to read as "the user changed the track"
+    # and strike a spurious early skip against a song merely advanced past.
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    old = await dj.play_next()
+
+    async def slow_play(cmd, timeout=None):
+        if cmd.get("cmd") == "play":
+            tx.calls.append(cmd)
+            await asyncio.sleep(0.2)
+            return {"ok": True, "state": 2}
+        return await FakeTransport.call(tx, cmd, timeout)
+
+    tx.call = slow_play
+    advance = asyncio.create_task(dj.play_next())
+    await asyncio.sleep(0.05)              # play sent, reply still pending
+    new_id = dj._pending_play
+    assert new_id and new_id != str(old["catalogId"])
+    await dj.on_event({"evt": "playback", "catalogId": new_id,
+                       "title": "Next", "artist": "Someone",
+                       "position": 800, "duration": 200000, "state": 2})
+    await advance
+    m = (store.read_json(store.SIGNALS, {}).get(old["catalogId"], {})
+         .get("byMood", {}).get("coding", {}))
+    assert m.get("skips", 0) == 0, "the transition scored as a user skip"
+
+
+@pytest.mark.asyncio
+async def test_an_interrupted_tracks_end_is_not_a_completion():
+    # An urgent mood change interrupts track A with a play for track B. The
+    # player reports A as ended; scoring that as "finished" would inflate
+    # completes (defeating skip_shunned), and advancing on it would cut B
+    # off seconds after it began.
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    old = await dj.play_next()
+
+    async def slow_play(cmd, timeout=None):
+        if cmd.get("cmd") == "play":
+            tx.calls.append(cmd)
+            await asyncio.sleep(0.2)
+            return {"ok": True, "state": 2}
+        return await FakeTransport.call(tx, cmd, timeout)
+
+    tx.call = slow_play
+    advance = asyncio.create_task(dj.play_next())
+    await asyncio.sleep(0.05)              # play for B in flight
+    plays_during = len(tx.sent("play"))
+    await dj.on_event({"evt": "trackEnded", "catalogId": old["catalogId"]})
+    await advance
+    await asyncio.sleep(0.05)              # a wrongly queued advance lands here
+    m = (store.read_json(store.SIGNALS, {}).get(old["catalogId"], {})
+         .get("byMood", {}).get("coding", {}))
+    assert m.get("completes", 0) == 0, "an interrupted track scored as complete"
+    assert len(tx.sent("play")) == plays_during, \
+        "the old track's end triggered another advance"
+
+
 def test_two_early_skips_shun_a_track_but_a_full_listen_redeems_it():
     signals = {}
     track = {"catalogId": "c1", "title": "T", "artist": "A"}
@@ -969,6 +1031,10 @@ async def test_a_mood_change_during_a_refill_is_not_dropped():
 # ------------------------------------------------------------------ shutdown
 
 
+# Marked explicitly (like every other async test here) instead of relying on
+# pytest.ini's asyncio_mode = auto: from a rootdir that misses that ini, bare
+# async tests error out instead of running.
+@pytest.mark.asyncio
 async def test_shutdown_event_pauses_broadcasts_and_sets_event():
     tx = FakeTransport()
     dj = make_dj(tx)
@@ -983,6 +1049,7 @@ async def test_shutdown_event_pauses_broadcasts_and_sets_event():
     assert dj.shutdown_event.is_set()
 
 
+@pytest.mark.asyncio
 async def test_shutdown_when_not_playing_skips_pause():
     tx = FakeTransport()
     dj = make_dj(tx)

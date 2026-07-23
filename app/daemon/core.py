@@ -54,6 +54,13 @@ class DJ:
         self.autoplay_blocked = False
         self.playing = False
         self.listeners = []          # UI push callbacks
+        self._tasks = set()          # strong refs to fire-and-forget tasks
+        # catalogId of a track whose play command is still awaiting its reply.
+        # Events for it during that window are the new track arriving, not the
+        # user changing tracks -- without this the transition records a
+        # spurious early skip against the outgoing track, and two of those
+        # shun it in this mood for good.
+        self._pending_play = None
         self._refill_lock = asyncio.Lock()
         # Confirming a play takes several seconds. Without this, a mood change
         # arriving next to a trackEnded runs two of them at once and the queue
@@ -76,6 +83,23 @@ class DJ:
     def subscribe(self, fn):
         self.listeners.append(fn)
 
+    def _spawn(self, coro):
+        """create_task, with a strong reference held until the task is done.
+
+        The event loop only keeps weak references, so a bare create_task can
+        be garbage-collected mid-flight. Same pattern as the transport's
+        event-handler set.
+        """
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+        return task
+
+    def _task_done(self, task):
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background task failed", exc_info=task.exception())
+
     def ui_state(self):
         rating = 0
         if self.current and self.current.get("catalogId"):
@@ -86,6 +110,7 @@ class DJ:
                 "catalogId": (self.current or {}).get("catalogId"),
                 "title": (self.current or {}).get("title"),
                 "artist": (self.current or {}).get("artist"),
+                "album": (self.current or {}).get("album"),
                 "artworkUrl": (self.current or {}).get("artworkUrl"),
                 "position": (self.current or {}).get("position", 0),
                 "duration": (self.current or {}).get("duration", 0),
@@ -302,11 +327,16 @@ class DJ:
             self.queue = rest
             store.write_json(store.QUEUE, self.queue)
 
+            # Confirming takes seconds, and the new track's first events can
+            # arrive before the reply does. Marking it lets on_event tell
+            # "our own transition" from "the user changed the track".
+            self._pending_play = str(track["catalogId"])
             reply = await self.tx.call({"cmd": "play", "catalogId": track["catalogId"]},
                                        timeout=45)
             if not reply.get("error"):
                 break
 
+            self._pending_play = None
             log.warning("play failed for %s: %s", track.get("title"), reply["error"])
             self.notice = "skipped %s (%s)" % (track.get("title"), reply["error"])
             track = None
@@ -329,8 +359,12 @@ class DJ:
             log.warning("%s was accepted but did not start (state %s). State 1 "
                         "means the browser is holding audio: click play once in "
                         "the DJ tab.", track.get("title"), state)
+        # The reply already says whether audio is flowing; waiting for the
+        # first playback event leaves the overlay's button wrong for a beat.
+        self.playing = state == 2
 
         self.current = track
+        self._pending_play = None
         self.lyrics = None           # they belong to the previous song
         self.history = library.remember_play(self.history, track, self.now())
         store.write_json(store.HISTORY, self.history)
@@ -339,7 +373,7 @@ class DJ:
 
         # Refill ahead of time so the next advance never waits on a search.
         if library.needs_refill(self.queue):
-            asyncio.create_task(self.refill())
+            self._spawn(self.refill())
         return track
 
     async def reseed(self):
@@ -358,6 +392,37 @@ class DJ:
         if reply.get("error"):
             log.warning("re-seed failed (%s); moving on", reply["error"])
             await self.play_next()
+
+    async def play_previous(self):
+        """Replay the track before this one, from our own history.
+
+        Every play hands the tab a single-song queue, so the player itself has
+        no previous track to go back to -- the daemon's history is the only
+        record of one. Put it back at the head of the queue and go through the
+        normal play path.
+        """
+        cur = str((self.current or {}).get("catalogId"))
+        prev = None
+        for play in (self.history or {}).get("plays", []):
+            if play.get("catalogId") and str(play["catalogId"]) != cur:
+                prev = play
+                break
+        if not prev:
+            # Nothing behind us. The bridge cannot do better with a
+            # single-song queue, but forwarding is all that is left to try.
+            await self.tx.call({"cmd": "previous"})
+            return
+        track = {
+            "catalogId": prev["catalogId"],
+            "title": prev.get("title"),
+            "artist": prev.get("artist"),
+            "why": "you asked to hear it again",
+            "mood": self.mood,
+        }
+        self.queue = dict(self.queue or {},
+                          tracks=[track] + library.queue_tracks(self.queue))
+        store.write_json(store.QUEUE, self.queue)
+        await self.play_next()
 
     # --------------------------------------------------------------- events
 
@@ -390,6 +455,14 @@ class DJ:
             # as ended, and treating that as "finished, move on" skips a track
             # you never heard. Only the track we believe is playing can end.
             ended = evt.get("catalogId")
+            if self._pending_play and (not ended or
+                                       str(ended) != self._pending_play):
+                # A play command is in flight and this end belongs to the
+                # track it interrupted. Scoring it as a completion and
+                # advancing again would cut the new track off seconds in.
+                log.debug("ignoring trackEnded for %s during a pending play",
+                          ended)
+                return
             playing = (self.current or {}).get("catalogId")
             if ended and playing and str(ended) != str(playing):
                 log.debug("ignoring trackEnded for %s; we are on %s",
@@ -426,10 +499,28 @@ class DJ:
                 log.info("audio is flowing again; autoplay unblocked")
                 self.autoplay_blocked = False
                 self.notice = None
-            if self.current and evt.get("catalogId") == self.current.get("catalogId"):
+            evt_id = evt.get("catalogId")
+            if self.current and evt_id is not None and \
+                    str(evt_id) == str(self.current.get("catalogId")):
                 self.current["position"] = evt.get("position", 0)
                 self.current["duration"] = evt.get("duration") or self.current.get("duration")
-            elif evt.get("catalogId"):
+                if evt.get("album"):
+                    self.current["album"] = evt.get("album")
+            elif evt_id and str(evt_id) == self._pending_play:
+                # The track we just commanded, reporting in before its play
+                # reply lands. `current` still names the outgoing track, so
+                # without this it would read as "the user changed the track"
+                # and strike a spurious skip against a song that was simply
+                # advanced past. Adopt it; the reply fills in the rest.
+                self.lyrics = None
+                self.current = {
+                    "catalogId": evt_id, "title": evt.get("title"),
+                    "artist": evt.get("artist"), "artworkUrl": evt.get("artworkUrl"),
+                    "album": evt.get("album"),
+                    "position": evt.get("position", 0), "duration": evt.get("duration"),
+                    "why": None,
+                }
+            elif evt_id:
                 # Something outside the DJ changed the track (the user clicked
                 # around in the tab). Follow it rather than fighting it --
                 # but abandoning our pick early is a skip in all but name.
@@ -441,8 +532,9 @@ class DJ:
                     store.write_json(store.SIGNALS, self.signals)
                 self.lyrics = None
                 self.current = {
-                    "catalogId": evt.get("catalogId"), "title": evt.get("title"),
+                    "catalogId": evt_id, "title": evt.get("title"),
                     "artist": evt.get("artist"), "artworkUrl": evt.get("artworkUrl"),
+                    "album": evt.get("album"),
                     "position": evt.get("position", 0), "duration": evt.get("duration"),
                     "why": (self.current or {}).get("why"),
                 }
@@ -471,7 +563,7 @@ class DJ:
             # Each start is a chance to notice what they added to the library
             # since last time; the advisor reads the snapshot on every batch.
             if not self._library_refreshed:
-                asyncio.create_task(self.refresh_library_view())
+                self._spawn(self.refresh_library_view())
             # A reload wipes the MusicKit queue and every listener, so re-seed
             # what was playing. This hangs off "ready" rather than "injected"
             # because injected fires at document_start, when MusicKit does not
@@ -507,13 +599,21 @@ class DJ:
                         self.current.get("duration"), self.now())
                     store.write_json(store.SIGNALS, self.signals)
                 await self.play_next()      # our queue, not Apple's
+            elif action == "previous":
+                await self.play_previous()  # our history, not Apple's
             else:
                 await self.tx.call({"cmd": action})
                 # Reflect it straight away rather than waiting for the player
                 # to report back, so the button never lags the click.
-                if action in ("pause", "resume"):
-                    self.playing = action == "resume"
+                self.playing = action == "resume"
             self.push()
+
+        elif action == "seek":
+            try:
+                position = float(msg.get("position"))
+            except (TypeError, ValueError):
+                return
+            await self.tx.call({"cmd": "seek", "position": max(0.0, position)})
 
         elif action == "rate":
             await self.rate(int(msg.get("stars", 0)))
@@ -546,6 +646,14 @@ class DJ:
             return
         self.ratings = library.rate(self.ratings, self.current, self.mood, stars)
         store.write_json(store.RATINGS, self.ratings)
+        if stars == 1:
+            # Future refills already exclude it, but a copy sitting in the
+            # queue right now would still play this cycle.
+            cid = str(self.current.get("catalogId"))
+            keep = [t for t in library.queue_tracks(self.queue)
+                    if str(t.get("catalogId")) != cid]
+            self.queue = dict(self.queue or {}, tracks=keep)
+            store.write_json(store.QUEUE, self.queue)
         self.push()
         if stars == 5:
             await self.star(self.current)

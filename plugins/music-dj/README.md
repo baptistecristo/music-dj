@@ -24,6 +24,12 @@ and usage. This file documents the plugin internals.
   `list_playlists`, `now_playing`, `pause_music`, `resume_music`).
 - `lib/musicdj.py` — shared config/state, activity classifier, debounce
   logic, AppleScript control.
+- `.mcp.json` — launches the MCP server with `${MUSIC_DJ_PYTHON:-python3}`.
+  MCP commands are spawned without a shell, so no `python3 || python`
+  fallback is possible here (hooks do use that trick). `python3` is right on
+  macOS/Linux and Microsoft-Store Python; on a python.org Windows install
+  there is no `python3.exe`, so the installer sets the `MUSIC_DJ_PYTHON`
+  user environment variable to the real interpreter path instead.
 
 ## User-machine files (never in the repo)
 

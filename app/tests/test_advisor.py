@@ -116,17 +116,20 @@ def test_the_prompt_goes_over_stdin_not_as_an_argument(monkeypatch):
     truncated question and the answer is unusable."""
     seen = {}
 
-    def fake_run(cmd, **kwargs):
-        seen["cmd"] = cmd
-        seen["input"] = kwargs.get("input")
+    class FakeProc:
+        returncode = 0
+        pid = 4242
 
-        class R:
-            returncode = 0
-            stdout = GOOD
-        return R()
+        def communicate(self, input=None, timeout=None):
+            seen["input"] = input
+            return GOOD, ""
+
+    def fake_popen(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return FakeProc()
 
     monkeypatch.setattr(advisor.shutil, "which", lambda name: r"C:\claude.CMD")
-    monkeypatch.setattr(advisor.subprocess, "run", fake_run)
+    monkeypatch.setattr(advisor.subprocess, "Popen", fake_popen)
 
     multiline = "line one\nline two"
     advisor._run_cli(multiline, 15)
