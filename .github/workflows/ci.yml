@@ -73,7 +73,8 @@ jobs:
           import json
           for f in ['plugins/music-dj/.claude-plugin/plugin.json',
                     '.claude-plugin/marketplace.json',
-                    'plugins/music-dj/hooks/hooks.json']:
+                    'plugins/music-dj/hooks/hooks.json',
+                    'app/extension/manifest.json']:
               json.load(open(f, encoding='utf-8-sig'))
               print(f, 'ok')
           "
