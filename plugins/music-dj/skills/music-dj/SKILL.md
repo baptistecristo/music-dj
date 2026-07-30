@@ -9,7 +9,7 @@ description: >
   "[music-dj]" marker appears in hook context, or proactively at the start of
   a long working session if the user has used the DJ before.
 metadata:
-  version: "0.6.0"
+  version: "0.7.0"
 ---
 
 # Music DJ

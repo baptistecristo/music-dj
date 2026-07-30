@@ -351,6 +351,31 @@ def test_an_overlong_reason_is_truncated_for_the_strip():
 
 # ------------------------------------------------------ resolving to a track
 
+# ------------------------------------------------- a swap echo vs a real end
+
+def test_an_end_seconds_into_a_long_track_is_an_echo():
+    assert library.ended_too_early({"position": 5000, "duration": 200000})
+
+
+def test_an_end_at_the_end_of_a_track_is_real():
+    assert not library.ended_too_early({"position": 199000, "duration": 200000})
+
+
+def test_a_thirty_second_preview_ending_at_thirty_seconds_is_real():
+    # Small in absolute terms, but the item had nowhere further to go.
+    assert not library.ended_too_early({"position": 29500, "duration": 30000})
+
+
+def test_an_end_from_a_page_that_does_not_report_the_playhead_is_trusted():
+    # Older page scripts send no position at all. Guessing "echo" there would
+    # stop the music for good; guessing "real" only risks the old symptom.
+    assert not library.ended_too_early({"catalogId": "c1"})
+
+
+def test_a_long_way_in_with_no_duration_known_is_real():
+    assert not library.ended_too_early({"position": 120000})
+
+
 def test_resolution_prefers_the_artist_we_asked_for():
     songs = [{"catalogId": "1", "artist": "Tribute Band", "title": "Veridis Quo"},
              {"catalogId": "2", "artist": "Daft Punk", "title": "Veridis Quo"}]

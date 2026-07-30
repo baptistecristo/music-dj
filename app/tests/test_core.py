@@ -314,12 +314,85 @@ async def test_something_breaking_switches_the_music_immediately():
 
 
 @pytest.mark.asyncio
-async def test_pinning_a_mood_by_hand_switches_immediately():
+async def test_pinning_a_mood_by_hand_lets_the_song_finish():
+    # Picking a mood asks for what to play next. Cutting the current song off
+    # to serve it -- after ten seconds of searching, no less -- is not what
+    # the click meant; the queue behind it is what changes.
     dj = make_dj()
     await dj.play_next()
     dj.tx.calls.clear()
     await dj.set_mood("loose", pinned=True, force=True)
-    assert dj.tx.sent("play"), "an explicit request should not wait"
+    assert dj.tx.sent("play") == [], "cut a song off to serve the new lane"
+    assert dj.tx.sent("pause") == [], "went quiet instead of finishing the song"
+    assert dj.queue["lane"] == "loose", "the queue behind it never changed"
+    assert "loose" in dj.ui_state()["notice"], "the click said nothing back"
+
+
+@pytest.mark.asyncio
+async def test_a_hand_picked_lane_starts_at_the_end_of_that_song():
+    dj = make_dj()
+    track = await dj.play_next()
+    await dj.set_mood("loose", pinned=True, force=True)
+    dj.tx.calls.clear()
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"],
+                       "position": 199000, "duration": 200000})
+    assert dj.tx.sent("play"), "the music stopped at the boundary"
+    assert dj.queue["lane"] == "loose"
+    assert dj.ui_state()["notice"] is None, "the waiting notice outlived the wait"
+
+
+@pytest.mark.asyncio
+async def test_a_hand_picked_urgent_mood_does_not_interrupt_either():
+    # is_urgent exists for the hook noticing something broke, not for a mood
+    # the user chose from the picker a moment ago.
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.set_mood("debugging", pinned=True, force=True)
+    assert dj.tx.sent("play") == []
+
+
+@pytest.mark.asyncio
+async def test_a_switch_from_silence_says_which_mood_it_is_lining_up():
+    # With no song to finish behind it, the switch is a plain wait: ten or
+    # twenty seconds of searching with nothing on screen to explain it.
+    tx = FakeTransport()
+    tx.search_delay = 0.05
+    dj = make_dj(tx)
+    seen = []
+    dj.subscribe(lambda s: seen.append(s.get("preparing")))
+    switch = asyncio.create_task(dj.set_mood("loose", pinned=True, force=True))
+    await asyncio.sleep(0.02)
+    assert dj.ui_state()["preparing"] == "loose"
+    await switch
+    assert "loose" in seen
+    assert dj.ui_state()["preparing"] is None, "the wait was never cleared"
+    assert dj.current is not None, "the switch never started the music"
+
+
+@pytest.mark.asyncio
+async def test_the_start_poller_keeps_out_while_a_lane_is_being_built():
+    # ensure_playing() fires every few seconds on nothing being current. The
+    # silence during a switch is deliberate and the queue behind it is half
+    # written; starting from it would play a track from neither lane.
+    tx = FakeTransport()
+    tx.search_delay = 0.1
+    dj = make_dj(tx)
+    switch = asyncio.create_task(dj.set_mood("loose", pinned=True, force=True))
+    await asyncio.sleep(0.02)
+    assert await dj.ensure_playing() is None, "cut in on a half-built queue"
+    await switch
+
+
+@pytest.mark.asyncio
+async def test_a_mood_drift_does_not_stop_the_music_to_build_the_new_lane():
+    dj = make_dj()
+    await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.set_mood("writing")
+    assert dj.tx.sent("pause") == []
+    assert dj.ui_state()["preparing"] is None
+    assert dj.ui_state()["nowPlaying"] is not None
 
 
 @pytest.mark.asyncio
@@ -731,6 +804,110 @@ async def test_rating_with_nothing_playing_is_harmless():
     await dj.on_action({"action": "rate", "stars": 5})   # must not raise
 
 
+# ------------------------------------------------- stars reaching the picker
+#
+# Each hop is unit-tested elsewhere. These walk the whole loop, because that
+# is the claim the stars make: rate a song and the next batch knows.
+
+def watched(dj):
+    """Point the DJ at the real advisor and collect the prompts it writes.
+
+    The runner stands in for the CLI and answers nothing, so every batch falls
+    back to the profile -- what is being checked is what the picker was told,
+    not what it picked.
+    """
+    from daemon import advisor
+    prompts = []
+    dj.picks_for = lambda mood, lane: advisor.picks_for(
+        mood, lane, seeds=dj.seeds, rng=dj.rng,
+        runner=lambda prompt, timeout: prompts.append(prompt) or "")
+    return prompts
+
+
+def section(prompt, heading):
+    """The block under one '## …' heading, or "" if it is not there.
+
+    Titles show up in several sections -- "just played" lists them all -- so
+    which section a track lands in is the whole question.
+    """
+    start = prompt.find(heading)
+    if start < 0:
+        return ""
+    rest = prompt[start:]
+    end = rest.find("\n## ", 1)
+    return rest if end < 0 else rest[:end]
+
+
+@pytest.mark.asyncio
+async def test_five_stars_reaches_the_prompt_that_picks_the_next_batch(
+        isolated_storage):
+    dj = make_dj()
+    prompts = watched(dj)
+    track = await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 5})
+    prompts.clear()
+    await dj.refill()
+
+    assert prompts, "the next batch was picked without asking"
+    loved = section(prompts[-1], "## They rated these 5 stars")
+    assert track["title"] in loved, "the star never reached the picker"
+    assert "Lean towards this register" in loved
+
+
+@pytest.mark.asyncio
+async def test_one_star_reaches_the_prompt_and_bars_the_track(isolated_storage):
+    dj = make_dj()
+    prompts = watched(dj)
+    track = await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 1})
+    assert track["catalogId"] not in [t["catalogId"]
+                                      for t in library.queue_tracks(dj.queue)], \
+        "a one-star track was left sitting in the queue"
+
+    prompts.clear()
+    await dj.refill()
+    assert track["title"] in section(prompts[-1], "## They rated these 1 star")
+    assert track["catalogId"] not in [t["catalogId"]
+                                      for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_two_early_skips_reach_the_picker_as_a_verdict(isolated_storage):
+    dj = make_dj()
+    prompts = watched(dj)
+    track = await dj.play_next()
+    for _ in range(2):
+        dj.current["position"] = 9000
+        dj.current["duration"] = 200000
+        await dj.on_action({"action": "skip"})
+        dj.current = track                  # same song back under the needle
+    prompts.clear()
+    await dj.refill()
+    assert track["title"] in section(prompts[-1], "## They skip these early")
+
+
+@pytest.mark.asyncio
+async def test_a_rating_given_in_one_mood_stays_out_of_another(isolated_storage):
+    dj = make_dj()
+    prompts = watched(dj)
+    await dj.play_next()                            # mood is "coding"
+    await dj.on_action({"action": "rate", "stars": 5})
+    dj.mood = "loose"
+    prompts.clear()
+    await dj.refill()
+    assert section(prompts[-1], "## They rated these 5 stars") == "", \
+        "a verdict from another mood leaked into this one"
+
+
+@pytest.mark.asyncio
+async def test_the_stars_survive_a_restart(isolated_storage):
+    dj = make_dj()
+    track = await dj.play_next()
+    await dj.on_action({"action": "rate", "stars": 4})
+    # A fresh DJ over the same storage is what tomorrow morning looks like.
+    assert library.rating_for(make_dj().ratings, track["catalogId"], "coding") == 4
+
+
 # --------------------------------------------------------------- signals
 
 @pytest.mark.asyncio
@@ -824,6 +1001,34 @@ async def test_an_interrupted_tracks_end_is_not_a_completion():
     assert m.get("completes", 0) == 0, "an interrupted track scored as complete"
     assert len(tx.sent("play")) == plays_during, \
         "the old track's end triggered another advance"
+
+
+@pytest.mark.asyncio
+async def test_an_end_five_seconds_in_is_the_queue_swap_echoing():
+    # Swapping the player's queue reports the teardown as an end, under the
+    # name of the song that just started. The page gags that for a few
+    # seconds; a slow swap outlives the gag, and the song then gets burned
+    # five seconds in -- over and over, every track.
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"],
+                       "position": 5000, "duration": 200000})
+    assert dj.tx.sent("play") == [], "burned a track five seconds in"
+    assert dj.current["catalogId"] == track["catalogId"]
+    m = (store.read_json(store.SIGNALS, {}).get(track["catalogId"], {})
+         .get("byMood", {}).get("coding", {}))
+    assert m.get("completes", 0) == 0, "five seconds scored as a full listen"
+
+
+@pytest.mark.asyncio
+async def test_a_song_that_played_through_still_advances():
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.tx.calls.clear()
+    await dj.on_event({"evt": "trackEnded", "catalogId": track["catalogId"],
+                       "position": 199000, "duration": 200000})
+    assert dj.tx.sent("play"), "the music stopped at the end of a song"
 
 
 def test_two_early_skips_shun_a_track_but_a_full_listen_redeems_it():
