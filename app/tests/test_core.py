@@ -620,6 +620,52 @@ async def test_the_user_changing_track_in_the_tab_is_followed_not_fought():
 # ------------------------------------------------------------------- actions
 
 @pytest.mark.asyncio
+async def test_previous_restarts_the_song_before_it_leaves_it():
+    dj = make_dj()
+    track = await dj.play_next()
+    dj.current["position"] = 45000
+    dj.tx.calls.clear()
+    await dj.on_action({"action": "previous"})
+    assert dj.tx.sent("seek") == [{"cmd": "seek", "position": 0}]
+    assert dj.tx.sent("play") == [], "left a song 45 seconds in"
+    assert dj.current["catalogId"] == track["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_previous_again_goes_back_a_song():
+    # No click counter: the first press left the playhead at zero, so the
+    # second one lands in the other branch by itself.
+    dj = make_dj()
+    first = await dj.play_next()
+    second = await dj.play_next()
+    dj.current["position"] = 45000
+    await dj.on_action({"action": "previous"})       # restarts
+    assert dj.current["catalogId"] == second["catalogId"]
+    dj.tx.calls.clear()
+    await dj.on_action({"action": "previous"})       # now goes back
+    assert dj.tx.sent("play"), "the second press did not move"
+    assert dj.current["catalogId"] == first["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_previous_within_the_first_seconds_goes_straight_back():
+    dj = make_dj()
+    first = await dj.play_next()
+    await dj.play_next()
+    dj.current["position"] = 1200
+    dj.tx.calls.clear()
+    await dj.on_action({"action": "previous"})
+    assert dj.tx.sent("seek") == [], "restarted a song that had just begun"
+    assert dj.current["catalogId"] == first["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_previous_with_nothing_playing_is_harmless():
+    dj = make_dj()
+    await dj.on_action({"action": "previous"})       # must not raise
+
+
+@pytest.mark.asyncio
 async def test_skip_uses_our_queue_rather_than_apples():
     dj = make_dj()
     await dj.play_next()

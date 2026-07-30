@@ -1,16 +1,18 @@
 # music-dj overlay
 
-An always-on-top DJ for Windows that plays Apple Music matched to your working
-mood, independent of any Claude session.
+An always-on-top DJ that plays Apple Music matched to your working mood,
+independent of any Claude session. Runs on Windows, macOS and Linux, in any
+Chromium browser or in Firefox 128+.
 
 Built alongside the `music-dj` Claude Code plugin, not replacing it. The
 plugin's hook keeps classifying activity into `~/.music-dj/state.json`; this
 app reads that file and plays the music.
 
 ```
-extension/   Chrome/Edge extension -- the hands, inside music.apple.com
-daemon/      Python -- the brain: mood, queue, history, ratings, Claude picking
+extension/   browser extension -- the hands, inside music.apple.com
+daemon/      Python -- the brain: mood, queue, history, taste, Claude picking
 overlay/     pywebview mini player
+host/        native messaging host + registration
 tools/       throwaway CLI driver + transport smoke test
 tests/       the test suite, browser mocked
 ```
@@ -19,30 +21,40 @@ tests/       the test suite, browser mocked
 
 Two one-time steps, then it lives in the toolbar.
 
-**1. The extension**, once. `edge://extensions` (or `chrome://extensions`) →
-Developer mode → **Load unpacked** → pick `app/extension`. Then open
-<https://music.apple.com> and sign in; the tab title becomes **DJ**.
+**1. The extension**, once.
+
+- Chromium (`chrome://extensions`, `edge://extensions`, `brave://extensions`)
+  → Developer mode → **Load unpacked** → pick `app/extension`.
+- Firefox (`about:debugging#/runtime/this-firefox`) → **Load Temporary
+  Add-on** → pick `app/extension/manifest.json`. Firefox drops temporary
+  add-ons when it closes; signing it through addons.mozilla.org is what makes
+  it stick.
+
+Then open <https://music.apple.com> and sign in; the tab title becomes **DJ**.
 
 Allow autoplay for the site, or playback stops between tracks: click the icon
 left of the address bar → **Permissions for this site** → **Media autoplay** →
 **Allow**.
 
-**2. The launcher**, once: run `app\host\register.ps1`. It registers the
-native messaging host that lets the browser start the DJ. No admin, all
-HKCU; re-run it if the folder ever moves.
+**2. The launcher**, once: run `python app/host/register.py`. It registers the
+native messaging host that lets the browser start the DJ, for every browser it
+finds — the Windows registry under HKCU, or the per-browser manifest directory
+on macOS and Linux. No admin anywhere. Re-run it if the folder ever moves, and
+run it with `--list` to see where it would write without writing anything.
 
 **From then on, the extension icon is the switch.** Click it and the
 launcher starts the daemon and the overlay -- no consoles, no desktop
-shortcut -- and the extension opens its own pinned Apple Music tab if none
-is there. The badge reads **ON** while the daemon is connected. Click again
-to stop: the music pauses, the overlay closes, the daemon exits, the badge
-clears. Clicking twice fast cannot start two daemons; the launcher checks
-the port first. An **ERR** badge means the host is not registered -- run
-step 2 and reload the extension.
+shortcut -- and the extension opens its own pinned Apple Music tab if none is
+there, bringing it to the front so the first click that unlocks audio has
+something to land on. The badge reads **ON** while the daemon is connected.
+Click again to stop: the music pauses, the overlay closes, the daemon exits,
+the badge clears. Clicking twice fast cannot start two daemons; the launcher
+checks the port first. An **ERR** badge means the host is not registered --
+run step 2 and reload the extension.
 
-`app\start.cmd` still does the same launch from the desktop, when you want
-it without the browser round-trip. When something is wrong, run the pieces
-by hand to see the logs:
+`app\start.cmd` (or `app/start.sh`) still does the same launch from the
+desktop, when you want it without the browser round-trip. When something is
+wrong, run the pieces by hand to see the logs:
 
 ```
 cd app
@@ -66,9 +78,22 @@ reason Claude gave (kept in the queue data, not shown). The taste profile is
 the floor underneath: a missing CLI, a timeout or an unparseable answer all
 fall through to it, so the music never stops because the model was unhelpful.
 
-**The overlay** is a 95px album cover, translucent, always on top and absent
-from the taskbar. Hover it and it opens into a mini player: title, artist, the
-why-line, a scrubber, transport, five stars and the mood chip.
+**The overlay** is a 60px album cover, translucent, always on top and absent
+from the taskbar. Hover it and it opens into a mini player: title, artist, a
+scrubber, transport, five stars and the mood chip.
+
+On Windows it is properly frosted, keeps out of Alt+Tab and the taskbar, and
+fades to nothing when the music pauses. That is all Win32: DWM acrylic,
+layered alpha, `WS_EX_TOOLWINDOW`, click-through. None of it has an
+equivalent that macOS and Linux share, so there the same window runs on
+pywebview alone — frameless, on top, its own background instead of the
+system's blur, hidden and shown rather than faded. `overlay/app.py` returns
+early from every Win32 call off Windows; the callers all had a fallback
+already, because those calls can fail on the wrong Windows build too.
+
+**Previous** restarts the song. Press it again within the first few seconds
+and it goes back one — the playhead is at zero by then, so the second press
+takes the other branch without anything counting clicks.
 
 **Ratings are per mood.** One star while debugging says nothing about a Friday
 night. Five stars adds the track to a playlist you choose during setup, and

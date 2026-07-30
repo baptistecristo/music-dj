@@ -1,9 +1,9 @@
 """Native messaging host: the browser's way to start the DJ.
 
-Registered by register.ps1. When the toolbar icon is clicked with nothing
+Registered by register.py. When the toolbar icon is clicked with nothing
 running, the browser spawns this with one framed JSON message on stdin; it
-starts the daemon and the overlay exactly like start.cmd does, replies, and
-exits. Nothing stays resident.
+starts the daemon and the overlay exactly like start.cmd (or start.sh) does,
+replies, and exits. Nothing stays resident.
 """
 
 import json
@@ -15,6 +15,8 @@ import sys
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8787
+
+WINDOWS = sys.platform == "win32"
 
 DETACHED_PROCESS = 0x00000008
 CREATE_NO_WINDOW = 0x08000000
@@ -46,19 +48,37 @@ def daemon_running(port=PORT):
         return False
 
 
-def _pythonw():
-    # The daemon and overlay must not flash consoles; pythonw sits next to
-    # whichever python is running us.
-    cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    return cand if os.path.exists(cand) else sys.executable
+def _interpreter():
+    """The python to launch with.
+
+    On Windows that is pythonw, sitting next to whichever python is running
+    us, so the daemon and overlay do not flash a console. Nothing else has a
+    windowed interpreter, and nothing else needs one.
+    """
+    if WINDOWS:
+        cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.exists(cand):
+            return cand
+    return sys.executable
+
+
+def _detach():
+    """Whatever this platform needs to outlive the browser that spawned us.
+
+    Windows takes creation flags; POSIX has none of those, and passing them
+    raises. There the equivalent is a new session, so the daemon does not
+    take a hangup when the browser or its native-host pipe goes away.
+    """
+    if WINDOWS:
+        return {"creationflags": DETACHED_PROCESS | CREATE_NO_WINDOW}
+    return {"start_new_session": True}
 
 
 def spawn(module):
     subprocess.Popen(
-        [_pythonw(), "-m", module], cwd=APP_DIR,
-        creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+        [_interpreter(), "-m", module], cwd=APP_DIR,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, close_fds=True)
+        stderr=subprocess.DEVNULL, close_fds=True, **_detach())
 
 
 def handle(msg):

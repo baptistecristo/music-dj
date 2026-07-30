@@ -22,11 +22,13 @@
     --hairline: #32323c;
     --green: #57c77f;
 
-    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    --utility: "Bahnschrift", "Segoe UI", sans-serif;
-    /* Ships with Windows; renders transport marks as crisp vector glyphs
-       rather than the colour emoji the unicode media symbols fall back to. */
-    --icons: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+    /* Windows first, then the macOS and Linux equivalents, so the panel reads
+       as the system's own everywhere rather than falling to Times. */
+    --display: "Segoe UI Variable Display", "Segoe UI", -apple-system,
+               "SF Pro Display", "Helvetica Neue", Cantarell, system-ui,
+               sans-serif;
+    --utility: "Bahnschrift", "Segoe UI", -apple-system, "SF Compact Text",
+               "Helvetica Neue", Cantarell, system-ui, sans-serif;
   }
 
   * { box-sizing: border-box; }
@@ -76,6 +78,17 @@
     background: var(--bg);
     backdrop-filter: none;
   }
+
+  /* Off Windows there is no DWM acrylic sitting behind the page, so the tint
+     above would be translucent over nothing in particular. The panel brings
+     its own background there and keeps its rounded corners. Set from
+     overlay/app.py, which is the only side that knows the platform. */
+  body.noglass #shell {
+    background: rgba(20, 20, 25, .96);
+    backdrop-filter: blur(20px) saturate(150%);
+  }
+
+  body.noglass.open #shell { background: rgba(11, 11, 14, .98); }
 
   /* Collapsed there is nothing but the cover: no glass, no padding, no edge. */
   body:not(.open) #shell {
@@ -239,20 +252,29 @@
     gap: 14px;
   }
 
+  /* Transport marks are inline SVG, not an icon font. Segoe Fluent Icons
+     draws them beautifully and ships only with Windows; anywhere else those
+     private-use codepoints are empty boxes, and there is no font every
+     platform has. Paths render identically on all three. */
   #controls button {
     background: none; border: none; padding: 0;
-    font-family: var(--icons);
-    font-size: 13px;
     color: var(--muted);
     cursor: pointer;
-    line-height: 1;
+    line-height: 0;
     transition: color 100ms ease;
+  }
+
+  #controls button svg {
+    width: 15px; height: 15px;
+    display: block;
+    fill: currentColor;
   }
 
   #controls button:hover { color: var(--text); }
   #controls button:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
 
-  #playpause { font-size: 19px; color: var(--text); }
+  #playpause { color: var(--text); }
+  #playpause svg { width: 20px; height: 20px; }
 
   /* Five stars, filled left to right. Hovering previews the rating you would
      give, so you can see it before you commit to it. */
@@ -531,12 +553,24 @@
   <div id="controls" class="panel pywebview-drag-region">
     <div id="stars"></div>
     <div id="transport">
-      <button data-act="previous" title="Previous">&#xE892;</button>
-      <button data-act="playpause" id="playpause" title="Play">&#xE768;</button>
-      <button data-act="skip" title="Next">&#xE893;</button>
+      <button data-act="previous" title="Restart, or press again for the one before">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path
+          d="M7 6v12H5V6h2zm12 .5v11a1 1 0 0 1-1.55.83l-8-5.5a1 1 0 0 1 0-1.66l8-5.5A1 1 0 0 1 19 6.5z"/></svg>
+      </button>
+      <button data-act="playpause" id="playpause" title="Play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path id="ppath"
+          d="M7 5.5a1 1 0 0 1 1.53-.85l11 6.5a1 1 0 0 1 0 1.7l-11 6.5A1 1 0 0 1 7 18.5v-13z"/></svg>
+      </button>
+      <button data-act="skip" title="Next">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path
+          d="M17 6v12h2V6h-2zM5 6.5v11a1 1 0 0 0 1.55.83l8-5.5a1 1 0 0 0 0-1.66l-8-5.5A1 1 0 0 0 5 6.5z"/></svg>
+      </button>
     </div>
     <div id="right">
-      <button id="lyricsbtn" title="Lyrics">&#xE8D6;</button>
+      <button id="lyricsbtn" title="Lyrics">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path
+          d="M4 5h16v2H4V5zm0 4h11v2H4V9zm0 4h16v2H4v-2zm0 4h9v2H4v-2z"/></svg>
+      </button>
       <div id="chip"><span id="dot"></span><span id="moodname">&#x2014;</span></div>
     </div>
   </div>
@@ -561,7 +595,11 @@ const ACTIVITY = ["coding", "writing", "debugging", "building", "research"];
 // takes either, so both are worth offering.
 const VIBES = ["energized", "focus", "mellow", "loose", "tense"];
 
-const PLAY = "\uE768", PAUSE = "\uE769";
+// The play/pause button swaps one path rather than one glyph. Same reason as
+// the markup: an icon font would be Windows-only.
+const PLAY_PATH = "M7 5.5a1 1 0 0 1 1.53-.85l11 6.5a1 1 0 0 1 0 1.7l-11 6.5" +
+                  "A1 1 0 0 1 7 18.5v-13z";
+const PAUSE_PATH = "M7 5h3.5v14H7V5zm6.5 0H17v14h-3.5V5z";
 
 const el = (id) => document.getElementById(id);
 let state = null;
@@ -629,7 +667,7 @@ function render() {
   el("remain").textContent = "-" + clock(dur ? Math.max(0, dur - pos) : 0);
 
   const playing = !!(np && np.playing);
-  el("playpause").textContent = playing ? PAUSE : PLAY;
+  el("ppath").setAttribute("d", playing ? PAUSE_PATH : PLAY_PATH);
   el("playpause").title = playing ? "Pause" : "Play";
 
   const mood = (state && state.mood) || {};

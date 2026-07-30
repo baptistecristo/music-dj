@@ -20,6 +20,9 @@ log = logging.getLogger("music-dj")
 SEARCH_TIMEOUT = 20
 RESOLVE_CONCURRENCY = 4
 PLAY_ATTEMPTS = 3       # dead tracks to walk past before giving up on a cycle
+# Press "previous" further in than this and it restarts the song instead of
+# leaving it. Under it you are still at the top, so you meant the one before.
+RESTART_BEFORE_MS = 3000
 
 
 class DJ:
@@ -449,13 +452,27 @@ class DJ:
             await self.play_next()
 
     async def play_previous(self):
-        """Replay the track before this one, from our own history.
+        """Restart this song, or go back to the last one if it just started.
 
-        Every play hands the tab a single-song queue, so the player itself has
-        no previous track to go back to -- the daemon's history is the only
-        record of one. Put it back at the head of the queue and go through the
-        normal play path.
+        The two-press rule every music player uses, and the one the button
+        looks like it should follow: most of the time you want to hear this
+        song again from the top, and pressing again takes you off it. Because
+        the first press leaves the playhead at zero, the second press falls
+        through here on its own -- there is no click counter to keep.
+
+        Going back is served out of our own history: every play hands the tab
+        a single-song queue, so the player has no previous track of its own.
         """
+        position = (self.current or {}).get("position") or 0
+        if self.current and position > RESTART_BEFORE_MS:
+            await self.tx.call({"cmd": "seek", "position": 0})
+            # Reflected now rather than waiting for the player to report it,
+            # so a second press within the same second is judged on where the
+            # song actually is.
+            self.current["position"] = 0
+            self.push()
+            return
+
         cur = str((self.current or {}).get("catalogId"))
         prev = None
         for play in (self.history or {}).get("plays", []):

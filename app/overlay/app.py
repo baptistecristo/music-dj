@@ -5,18 +5,37 @@ itself; Python here only owns the things a web page cannot do -- growing the OS
 window on hover and remembering where you left it.
 
     python -m overlay.app
+
+Windows gets the full treatment: acrylic glass, layered alpha, no taskbar
+button, click-through when it hides itself. None of that has an equivalent
+the other platforms all share, so everywhere else the same window runs on
+pywebview alone -- frameless, on top, and honest about it. Every function
+below that reaches for the Win32 API returns early off Windows, and the
+callers already have a fallback because they needed one anyway: those calls
+fail on Windows too, on the wrong build.
 """
 
-import ctypes
-import ctypes.wintypes
 import logging
 import os
+import sys
 import threading
 import time
 
 import webview
 
 from daemon import store
+
+WINDOWS = sys.platform == "win32"
+
+if WINDOWS:
+    import ctypes
+    import ctypes.wintypes
+else:
+    # ctypes.wintypes does not merely lack the Windows types off Windows: it
+    # raises on import, which would take the whole overlay down before it drew
+    # anything. The module-level structures below need it, so they are built
+    # only where they mean something.
+    ctypes = None
 
 # Collapsed is just the album art, so the window is a sleeve-sized tile rather
 # than a strip. It opens on hover into a mini player shaped like Apple Music's:
@@ -126,24 +145,25 @@ IDLE_ALPHA = 190
 _hwnd = None                    # found once, reused for every alpha change
 
 
-class _Margins(ctypes.Structure):
-    _fields_ = [("cxLeftWidth", ctypes.c_int), ("cxRightWidth", ctypes.c_int),
-                ("cyTopHeight", ctypes.c_int), ("cyBottomHeight", ctypes.c_int)]
+if WINDOWS:
+    class _Margins(ctypes.Structure):
+        _fields_ = [("cxLeftWidth", ctypes.c_int),
+                    ("cxRightWidth", ctypes.c_int),
+                    ("cyTopHeight", ctypes.c_int),
+                    ("cyBottomHeight", ctypes.c_int)]
 
+    class _GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
 
-class _GUID(ctypes.Structure):
-    _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
-                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+    def _guid(d1, d2, d3, rest):
+        return _GUID(d1, d2, d3, (ctypes.c_ubyte * 8)(*rest))
 
+    CLSID_TASKBARLIST = _guid(0x56FDF344, 0xFD6D, 0x11D0,
+                              (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
+    IID_ITASKBARLIST = _guid(0x56FDF342, 0xFD6D, 0x11D0,
+                             (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
 
-def _guid(d1, d2, d3, rest):
-    return _GUID(d1, d2, d3, (ctypes.c_ubyte * 8)(*rest))
-
-
-CLSID_TASKBARLIST = _guid(0x56FDF344, 0xFD6D, 0x11D0,
-                          (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
-IID_ITASKBARLIST = _guid(0x56FDF342, 0xFD6D, 0x11D0,
-                         (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90))
 CLSCTX_INPROC_SERVER = 1
 # ITaskbarList vtable: QueryInterface, AddRef, Release, HrInit, AddTab,
 # DeleteTab, ActivateTab, SetActiveAlt.
@@ -158,6 +178,8 @@ def hide_from_taskbar(hwnd):
     owns loses it for good. The shell exposes this instead, and it works on a
     window that is already up.
     """
+    if not WINDOWS:
+        return False
     ole32 = ctypes.windll.ole32
     ole32.CoInitialize(None)
     ptr = ctypes.c_void_p()
@@ -192,6 +214,8 @@ def find_windows(title, visible_only=False):
     overlay instance would otherwise find -- and restyle, and resize, across
     DPI contexts -- the first one's window.
     """
+    if not WINDOWS:
+        return []
     user32 = ctypes.windll.user32
     our_pid = os.getpid()
     found = []
@@ -224,6 +248,8 @@ def find_visible_window(title):
 
 def make_toolwindow(hwnd):
     """Mark the window as furniture: out of Alt+Tab, out of the taskbar."""
+    if not WINDOWS:
+        return
     user32 = ctypes.windll.user32
     style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
     wanted = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
@@ -243,6 +269,8 @@ def hide_from_switchers_early():
     each time it opens, so even a lost race still keeps the overlay out of the
     switcher; only the taskbar button needs the head start.
     """
+    if not WINDOWS:
+        return
     def watch():
         user32 = ctypes.windll.user32
         deadline = time.time() + 10
@@ -266,8 +294,12 @@ def apply_glass(window):
     """Frost the window using Windows 11 acrylic.
 
     Needs Windows 11 22H2 or newer; older builds ignore the attribute and you
-    simply get a flat dark window, which is why nothing here is fatal.
+    simply get a flat dark window, which is why nothing here is fatal. Off
+    Windows there is nothing to reach for: the page's own backdrop-filter is
+    the whole effect, and it is a good deal better than nothing.
     """
+    if not WINDOWS:
+        return
     # The start callback fires before the native form is attached, and on the
     # EdgeChromium backend window.native never appears at all -- so fall back
     # to asking Windows for the window by its title.
@@ -335,6 +367,8 @@ def adopt_solid_window():
     meaning exactly that -- the only fade this enables is the one to zero
     while the music is paused."""
     global _hwnd
+    if not WINDOWS:
+        return
     hwnd = None
     for _ in range(100):
         hwnd = find_visible_window(TITLE)
@@ -447,6 +481,13 @@ def vanish():
     WS_EX_TRANSPARENT stops the invisible rectangle from eating clicks and
     hovers meant for whatever is behind it.
     """
+    if not WINDOWS:
+        # No layered alpha to fade and no click-through to set. Plain hide is
+        # what the other backends give us, and the hazard that rules it out on
+        # Windows -- pywebview losing a WinForms window it re-shows -- is a
+        # WinForms problem, not a Cocoa or GTK one.
+        _toggle_window(False)
+        return
     if not _hwnd:
         return
     try:
@@ -458,8 +499,22 @@ def vanish():
     fade_alpha(0, floor=0)
 
 
+def _toggle_window(show):
+    """hide/show the pywebview window, for the backends that support it."""
+    win = webview.windows[0] if webview.windows else None
+    if not win:
+        return
+    try:
+        win.show() if show else win.hide()
+    except Exception:
+        log.debug("this backend cannot hide the window", exc_info=True)
+
+
 def reappear():
     """Undo vanish(): catch the pointer again and fade back in, collapsed."""
+    if not WINDOWS:
+        _toggle_window(True)
+        return
     if not _hwnd:
         return
     try:
@@ -576,6 +631,11 @@ def _run(args):
             adopt_solid_window()
             return
         apply_glass(win)
+        if not WINDOWS:
+            # No DWM acrylic to sit behind the page, so the page provides its
+            # own background rather than showing whatever the backend paints
+            # under a transparent window.
+            win.evaluate_js("document.body.classList.add('noglass')")
 
     # Runs once the native window exists; the handle does not before that.
     webview.start(on_start, window)
