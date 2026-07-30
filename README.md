@@ -1,51 +1,166 @@
 # 🎧 music-dj
 
-**An AI DJ for Claude.** It learns your taste from your own library, reads
-what kind of work you are doing, and picks songs to match. Tests start
-failing and the music calms down. You ship and it finds momentum. There are
-no playlists to maintain, because it chooses one track at a time.
+**Music that follows your work.** It watches what you are doing, works out
+what that feels like, and plays something that fits. Your tests start
+failing and it puts on something calm. You ship a feature and it finds
+momentum. You never build a playlist, because it chooses one song at a time
+and learns from what you do with each one.
 
-Works with **Apple Music, Spotify, SoundCloud, YouTube Music, Deezer, Tidal,
-Amazon Music, Qobuz, Bandcamp and Pandora**.
+Works with Apple Music, Spotify, SoundCloud, YouTube Music, Deezer, Tidal,
+Amazon Music, Qobuz, Bandcamp and Pandora.
 
-## How it works
+---
 
-**It learns your taste.** On first run the agent reads your library through
-your service's web player — artists, genres, what you have been playing —
-and writes a profile to `~/.music-dj/taste-profile.md`. Everything stays on
-your machine.
+## The problem, for anyone
 
-**It reads the room.** Hooks classify what you are doing from your tool
-calls: failing tests, passing builds, writing docs, reading around. Weighted
-and debounced, so the music does not flap every time you save a file.
+Music apps will not let a program control them. Apple Music and Spotify have
+desktop apps you cannot script on Windows at all. So the usual approach,
+"tell the music app what to play", is closed off before you start.
 
-**It plays through your browser.** The DJ drives your service's web player in
-a tab of its own. That is what lets it work on Windows, where the Apple Music
-and Spotify desktop apps cannot be scripted at all. On macOS with Apple Music
-there is also a native AppleScript mode.
+And even with control, you would still have to answer the harder question:
+what should play right now? A playlist cannot know you are twenty minutes
+into a bug. Recommendation engines like Spotify's work by comparing you to
+millions of other listeners, which is not available to one person on one
+laptop.
 
-**It takes requests.** "Play something", "calmer please", "skip", "put on
-some French rap", "what's playing?", "stop DJ-ing today".
+This solves both. Here is how.
 
-**It learns from what you do next.** Stars and skips feed back into the
-picks — per lane, carried up to the artist, and faded with age. See
-[app/README.md](app/README.md#how-it-learns) for the rules.
+---
 
-## What it runs on
+## Five problems worth reading about
 
-| | Supported | Notes |
+### 1. Playing music with no way in
+
+There is no back door, so the DJ goes through the front: it drives the same
+web player you would use yourself, from inside the page.
+
+A browser extension injects a script into the music site, in the same
+JavaScript world as the site's own code. From there it can call the player.
+The site's own access tokens are used to search the catalogue and never
+leave the page: not logged, not saved, not passed to the program driving it.
+
+The catch is that a browser deliberately makes this hard: extension code and
+page code are kept apart, and neither can see the other's variables. The
+bridge crosses that gap in two hops, page to extension to a local program,
+each with its own rules about what may pass.
+
+### 2. Knowing what you are doing
+
+Every action in [Claude Code](https://claude.com/claude-code) fires a hook.
+Editing files, running tests, reading documentation and watching a build
+fail all look different, so each one votes for a mood.
+
+Votes are weighted and decay. A single failing test does not count as a
+crisis, and one passing test does not mean the crisis is over. Without that,
+the music changed every thirty seconds, which is worse than the wrong music.
+
+### 3. Learning taste from almost nothing
+
+Spotify knows what you like by finding listeners similar to you. With one
+user there is nobody to compare against, and giving a song five stars
+teaches you about that one song out of tens of millions. You will not meet
+it again for a year.
+
+Three ideas make a handful of ratings go further, borrowed from
+[troi](https://github.com/metabrainz/troi-recommendation-playground), the
+open source engine behind ListenBrainz:
+
+**Group the moods that want the same music.** Coding and researching both
+want low-vocal instrumental, so a star given while coding counts while
+researching. Kept apart, five labels split the evidence so thin that most
+batches saw none of it.
+
+**Judge the artist, not the track.** A verdict on one song is spent the
+moment that song ends. Carried up to whoever made it, one star starts
+shaping the picks for songs you have never heard. It counts half, because it
+is a weaker claim, and it leaves out that song's own record. Counting that
+twice made one bad afternoon look like a pattern.
+
+**Let old opinions fade.** A verdict is worth half as much after 45 days.
+What you skipped in March should not still be deciding your July.
+
+Then Claude picks the batch, given your profile, the mood and everything
+above. When Claude is slow or unavailable the profile picks on its own, so
+the music never stops waiting for a model.
+
+### 4. A window that behaves like furniture
+
+The player is a small album cover that sits above everything, has no title
+bar, stays out of Alt+Tab and the taskbar, and dissolves when you pause.
+
+Windows gives you that through the compositor: acrylic blur, per-window
+transparency, and a style that makes the window ignore the mouse while it is
+invisible. Get it wrong and the window is gone for good, because hiding a
+window of this kind can lose it permanently. macOS and Linux share none of
+those APIs, so the same window runs there on the cross-platform layer alone
+and says so rather than pretending.
+
+### 5. Making one codebase run everywhere
+
+Three operating systems and seven browsers, each disagreeing about
+something:
+
+- The overlay **crashed on import** on macOS and Linux. The module that
+  describes Windows data types raises an error on other systems instead of
+  simply being empty.
+- The play and pause icons came from a font that ships only with Windows.
+  Everywhere else they were empty boxes. They are drawings now.
+- Starting a background program takes opposite arguments on Windows and
+  everywhere else. Passing the Windows ones elsewhere is an error, not a
+  no-op.
+- Teaching a browser to launch a local program means a registry key on
+  Windows and a file in a different directory for every browser on macOS and
+  Linux. One script now writes all of them.
+- Firefox spells half the extension API differently and returns a different
+  kind of value from the same call.
+
+---
+
+## How the pieces fit
+
+```
+   Claude Code            this app                        your browser
+   ───────────            ────────                        ────────────
+
+   what you're    ──▶  ~/.music-dj/    ──▶   daemon   ══▶   extension
+   doing now           state.json             │      ws        │
+   (hooks)                                    │               │ injects
+                                              │               ▼
+                       taste profile   ──▶    │            the page's
+                       ratings, skips         │           own player
+                                              │               │
+                                    ws        ▼               ▼
+                             overlay ◀────────┘            speakers
+                          (what's playing,
+                           stars, controls)
+```
+
+The daemon is the only piece that decides anything. The extension is hands,
+the overlay is a face, and both talk to it over local sockets that refuse
+connections from anywhere but this machine.
+
+---
+
+## What runs where
+
+| | Works | Notes |
 |---|---|---|
-| **Windows 10/11** | ✅ | Acrylic glass overlay, no taskbar button |
-| **macOS** | ✅ | Plain frameless overlay; the DWM glass is Windows-only |
-| **Linux** | ✅ | Same; needs a GTK or Qt pywebview backend |
-| **Chrome, Edge, Brave, Vivaldi, Opera** | ✅ | One Chromium build covers all of them |
-| **Firefox** | ✅ | 128 or newer — that is when content scripts reached the MAIN world |
-| **Safari** | ❌ | Would need repackaging as a Safari Web Extension through Xcode |
-| **Phones, tablets** | ❌ | The DJ is a local process driving a browser on the same machine |
+| **Windows 10/11** | ✅ | Frosted overlay, no taskbar button. Developed and used here |
+| **macOS** | ✅ | Plain overlay; the frosted glass is a Windows API |
+| **Linux** | ✅ | Same, with a GTK or Qt backend |
+| **Chrome, Edge, Brave, Vivaldi, Opera** | ✅ | One build covers all five |
+| **Firefox** | ✅ | 128 or newer |
+| **Safari** | ❌ | Needs repackaging through Xcode |
+| **Phones, tablets** | ❌ | The DJ runs beside your speakers, not in the cloud |
+
+macOS, Linux and Firefox are covered by the test suite on every push. They
+have not been driven by hand, and the README would rather say so.
+
+---
 
 ## Install
 
-### Windows (PowerShell)
+**Windows**
 
 ```powershell
 git clone https://github.com/baptistecristo/music-dj.git
@@ -53,7 +168,7 @@ cd music-dj
 .\install.ps1
 ```
 
-### macOS / Linux
+**macOS / Linux**
 
 ```bash
 git clone https://github.com/baptistecristo/music-dj.git
@@ -61,90 +176,48 @@ cd music-dj
 ./install.sh
 ```
 
-The installer asks which music service you use, saves it, installs the plugin
-into [Claude Code](https://claude.com/claude-code), and prints a short guide
-for that service. You can also install it from inside Claude Code:
-
-```
-/plugin marketplace add baptistecristo/music-dj
-/plugin install music-dj@music-dj
-```
-
-### Prerequisites
-
-- [Claude Code](https://claude.com/claude-code) (`npm install -g
-  @anthropic-ai/claude-code`)
-- Python 3, for the mood hooks. On Windows install it from
-  [python.org](https://www.python.org/downloads/) or the Microsoft Store; the
-  hooks try `python3` and fall back to `python`.
-- A browser from the table above, with the **Claude in Chrome** extension
-  installed *in that browser*. The installer asks which one to use.
-- An account on your music service. Which tier you need depends on the
-  service; the installer's guide says.
-
-## First run
-
-Open a terminal, run `claude`, and say:
+The installer asks which music service you use, installs the plugin into
+Claude Code, and prints a guide for that service. Then run `claude` and say:
 
 ```
 set up my music DJ
 ```
 
-The agent opens your service in its own tab, asks you to sign in — it never
-touches your credentials — reads your library, writes the profile, and plays
-something matched to what you are doing. After that it DJs from any Claude
-session, including a cloud one from your phone, as long as the browser is
-open on the machine with the speakers.
+It opens your service in a tab, asks you to sign in, reads your library,
+writes your taste profile, and starts playing.
 
-## The standalone app
+You need Claude Code, Python 3, one of the browsers above with the Claude in
+Chrome extension, and an account on your music service.
 
-`app/` is a self-contained version for Apple Music: a Python daemon, a
-browser extension, and a small always-on-top overlay. It runs without Claude
-Code once started. See [app/README.md](app/README.md) for how the picking and
-the learning work.
+There is also a **standalone app** for Apple Music that runs without Claude
+Code once started, with its own overlay and one-click launch from the
+browser toolbar. See [app/README.md](app/README.md).
 
-Setting it up takes two steps beyond the clone:
+---
 
-```bash
-python app/host/register.py       # teach the browser to start the DJ
-python app/host/register.py --list  # or just see where that would write
-```
+## Engineering notes
 
-Then load `app/extension/` as an unpacked extension:
-
-- **Chromium** — `chrome://extensions` → Developer mode → Load unpacked
-- **Firefox** — `about:debugging#/runtime/this-firefox` → Load Temporary
-  Add-on → pick `manifest.json`
-
-Clicking the toolbar icon starts the DJ, opens the player tab and brings it
-to the front. Clicking it again stops everything.
-
-## Repo layout
-
-```
-install.ps1 / install.sh          onboarding scripts
-.claude-plugin/marketplace.json   makes this repo a Claude Code marketplace
-plugins/music-dj/                 the plugin itself
-  skills/music-dj/                the DJ brain + per-service control references
-  hooks/                          activity → mood classification
-  server/                         MCP server (config anywhere; AppleScript on macOS)
-  lib/                            shared config/classifier/control library
-app/                              the standalone app (see app/README.md)
-  extension/                      the hands, inside the web player
-  daemon/                         the brain: mood, queue, taste, Claude picking
-  overlay/                        pywebview mini player
-  host/                           native messaging host + registration
-  tools/                          CLI driver + transport smoke test
-  tests/                          app test suite (browser mocked)
-tests/                            plugin test suite
-.github/workflows/                CI: both suites on 3 OSes, installer lint
-```
+- **275 automated tests**, run on Windows, macOS and Linux on every push. The
+  browser is mocked, so playback, queueing, mood changes, ratings and the
+  whole learning model are tested without a browser open.
+- **Failure is designed for.** A missing model, a timed-out search, a
+  reloaded tab, a dead track, two racing commands: each has a path that
+  keeps music playing. The rule throughout is that the music never stops
+  because something upstream was unhelpful.
+- **The comments explain why, not what.** Most of the hard parts here look
+  like ordinary code until you know which bug put them there, so the code
+  says.
 
 ## Privacy
 
-- The taste profile and all config live in `~/.music-dj/` on your machine.
-- The DJ never handles your password. You sign in to your service yourself.
-- Nothing from your library is sent anywhere by this plugin.
+- Your taste profile, ratings and history live in `~/.music-dj/` on your
+  machine.
+- The DJ never sees your password. You sign in to your music service
+  yourself, in your own browser.
+- Your library is never uploaded. When Claude picks the next batch, the
+  prompt carries your taste profile, recent plays and ratings, the same as
+  anything else you send Claude. Run the daemon with `--no-claude` and
+  picking happens entirely on your machine.
 
 ## License
 
