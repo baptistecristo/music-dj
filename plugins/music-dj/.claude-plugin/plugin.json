@@ -1,6 +1,6 @@
 {
   "name": "music-dj",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Context-aware DJ: learns your music taste from your library, reads your mood from how you're writing, and plays matching music. Supports Apple Music, Spotify, SoundCloud, YouTube Music, Deezer, Tidal, Amazon Music, Qobuz, Bandcamp, and Pandora via browser control; native AppleScript mode on macOS.",
   "author": {
     "name": "Baptiste Cristofari"

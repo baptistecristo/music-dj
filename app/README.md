@@ -61,11 +61,10 @@ advances the queue when a track ends. Apple's own autoplay is never used --
 curating is the point.
 
 **Picks come from Claude**, prompted with your taste profile, the current mood,
-recent plays, and the tracks you rated 5 and 1 star *in that mood*. Each pick
-carries the reason Claude gave (kept in the queue data, not shown). The taste
-profile is the floor underneath: a missing CLI, a timeout or an unparseable
-answer all fall through to it, so the music never stops because the model was
-unhelpful.
+recent plays, and what this lane has learned (below). Each pick carries the
+reason Claude gave (kept in the queue data, not shown). The taste profile is
+the floor underneath: a missing CLI, a timeout or an unparseable answer all
+fall through to it, so the music never stops because the model was unhelpful.
 
 **The overlay** is a 95px album cover, translucent, always on top and absent
 from the taskbar. Hover it and it opens into a mini player: title, artist, the
@@ -74,6 +73,36 @@ why-line, a scrubber, transport, five stars and the mood chip.
 **Ratings are per mood.** One star while debugging says nothing about a Friday
 night. Five stars adds the track to a playlist you choose during setup, and
 checks membership first so re-rating cannot duplicate.
+
+## How it learns
+
+Every star and every skip lands in the store under the mood you were in.
+`library.taste()` folds those into one view per lane. Three rules, taken from
+how [troi](https://github.com/metabrainz/troi-recommendation-playground), the
+ListenBrainz playlist engine, uses its own feedback.
+
+**Pooled by lane.** `coding` and `research` both draw from `focus`, so a star
+you give in one counts in the other. Split five ways, the evidence was thin
+enough that most batches saw none of it.
+
+**Carried up to the artist.** There are tens of millions of songs and you meet
+the same one twice a year, so a verdict on a track is spent on a track that
+never comes back. The artist is the one link already sitting on every row we
+store, so a star for one song shapes the picks for songs you have never heard.
+It counts half, capped, and leaves out that song's own record: counting it
+twice made one track's bad run look like a pattern across everything the
+artist ever did. Names match on their core, so "Daft Punk" and "Daft Punk
+feat. Julian Casablancas" are one artist.
+
+**Scored and faded.** Nothing gets banned outright. Candidates come back
+best-first and only the strongly negative drop out. A verdict is worth half as
+much 45 days on, so a bad afternoon in March is not still deciding your July.
+Unrated stays neutral, as it always has.
+
+The floor learns as well: the profile fallback drops seed artists this lane has
+ruled out and leads with the ones it likes, keeping the shuffle inside each
+band so you do not get the same favourite every time. Rewrite
+`taste-profile.md` and the next refill reads it, rather than the next restart.
 
 ## Two vocabularies, on purpose
 

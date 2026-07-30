@@ -34,7 +34,7 @@ ADDITIONS_IN_PROMPT = 20
 
 
 def build_prompt(profile, mood, lane, history, ratings,
-                 signals=None, additions=None):
+                 signals=None, additions=None, now=None):
     """Everything Claude needs to pick well, and nothing else."""
     recent = []
     for play in (history or {}).get("plays", [])[:RECENT_IN_PROMPT]:
@@ -42,9 +42,16 @@ def build_prompt(profile, mood, lane, history, ratings,
         if title and artist:
             recent.append("%s — %s" % (title, artist))
 
-    loved = library.rated_in_mood(ratings, mood, 5)
-    hated = library.rated_in_mood(ratings, mood, 1)
-    skipped = library.often_skipped(signals, mood)
+    # Pooled by lane rather than by mood: the batch is being built for a lane,
+    # and coding and research both draw from focus, so a star given in one is
+    # evidence in the other. Split by mood, five labels shared out evidence
+    # thin enough that most batches saw none at all.
+    loved = library.rated_in_lane(ratings, lane, 5)
+    hated = library.rated_in_lane(ratings, lane, 1)
+    skipped = library.often_skipped_in_lane(signals, lane)
+    learned = library.taste(ratings, signals, lane,
+                            time.time() if now is None else now)
+    liked_artists, avoided_artists = library.artists_by_verdict(learned)
 
     def names(entries):
         return [("%s — %s" % (e.get("title"), e.get("artist")))
@@ -79,6 +86,21 @@ def build_prompt(profile, mood, lane, history, ratings,
                   "\n".join(skipped),
                   "Read that as a no for this register, here. A song they "
                   "simply never rated is neutral, not disliked."]
+
+    # The per-track verdicts above are spent the moment the track is spent:
+    # the catalogue is enormous and the same song rarely comes round twice.
+    # Carried up to the artist they generalise, which is the only way a star
+    # given today changes anything about a song they have never heard.
+    if liked_artists:
+        parts += ["", "## Artists that land in this register",
+                  ", ".join(liked_artists),
+                  "Earned from what they rated and played through here. Draw "
+                  "on these and on artists close to them."]
+    if avoided_artists:
+        parts += ["", "## Artists that do not land here",
+                  ", ".join(avoided_artists),
+                  "Earned from low ratings and early skips in this register. "
+                  "This is about here, not about the artist everywhere."]
 
     adds = [("%s — %s" % (a.get("name"), a.get("artist"))) if a.get("artist")
             else str(a.get("name"))
@@ -191,7 +213,7 @@ def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,
     additions = store.read_json(store.LIBRARY_RECENT, {})
 
     prompt = build_prompt(profile, mood, lane, history, ratings,
-                          signals=signals, additions=additions)
+                          signals=signals, additions=additions, now=time.time())
     raw = ask_claude(prompt, timeout=timeout, runner=runner)
     picks = picker.validate_claude_picks(extract_json(raw)) if raw else []
 

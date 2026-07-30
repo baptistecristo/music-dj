@@ -57,14 +57,43 @@ def test_the_prompt_lists_recent_plays_so_they_are_not_repeated():
     assert "do not repeat" in prompt.lower()
 
 
-def test_the_prompt_only_shows_ratings_from_this_mood():
+def test_the_prompt_only_shows_ratings_from_this_lane():
     ratings = library.rate({}, {"catalogId": "1", "title": "Veridis Quo",
                                 "artist": "Daft Punk"}, "debugging", 5)
     ratings = library.rate(ratings, {"catalogId": "2", "title": "Da Funk",
                                      "artist": "Daft Punk"}, "loose", 5)
     prompt = advisor.build_prompt(PROFILE, "debugging", "tense", {}, ratings)
     assert "Veridis Quo" in prompt
-    assert "Da Funk" not in prompt, "leaked a rating from another mood"
+    assert "Da Funk" not in prompt, "leaked a rating from another lane"
+
+
+def test_a_star_from_a_sibling_mood_reaches_the_prompt():
+    # coding and research both draw from focus, so a star given in one is
+    # evidence in the other -- the batch is built per lane, not per label.
+    ratings = library.rate({}, {"catalogId": "1", "title": "Veridis Quo",
+                                "artist": "Daft Punk"}, "coding", 5)
+    prompt = advisor.build_prompt(PROFILE, "research", "focus", {}, ratings)
+    assert "Veridis Quo" in prompt
+
+
+def test_the_prompt_names_the_artists_that_land_in_this_register():
+    # The generalisation step: per-track verdicts are spent on tracks that
+    # rarely come round again, so the prompt has to carry them up an level.
+    ratings = library.rate({}, {"catalogId": "1", "title": "Good",
+                                "artist": "Bill Withers"}, "debugging", 5)
+    ratings = library.rate(ratings, {"catalogId": "2", "title": "Bad",
+                                     "artist": "Noisy Band"}, "debugging", 1)
+    prompt = advisor.build_prompt(PROFILE, "debugging", "tense", {}, ratings)
+    lands = prompt.index("Artists that land in this register")
+    does_not = prompt.index("Artists that do not land here")
+    assert prompt.index("Bill Withers", lands) < does_not
+    assert prompt.index("Noisy Band", does_not) > does_not
+
+
+def test_the_prompt_says_nothing_about_artists_before_anything_is_rated():
+    prompt = advisor.build_prompt(PROFILE, "debugging", "tense", {}, {})
+    assert "Artists that land" not in prompt
+    assert "do not land" not in prompt
 
 
 def test_the_prompt_separates_loved_from_hated():

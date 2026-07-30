@@ -8,7 +8,19 @@ to be good enough to listen to on its own.
 
 import random
 
+from . import library
+
 BATCH_SIZE = 12
+
+
+def _band(score):
+    """Liked, neutral, or out of favour. Coarse on purpose -- ordering seeds
+    by an exact score would make the floor deterministic and repetitive."""
+    if score >= 0.5:
+        return 1
+    if score <= -0.5:
+        return -1
+    return 0
 
 
 def pick_term(pick):
@@ -18,13 +30,20 @@ def pick_term(pick):
     return term or (pick.get("term") or "")
 
 
-def profile_batch(seeds, lane, count=BATCH_SIZE, avoid_artists=(), rng=None):
+def profile_batch(seeds, lane, count=BATCH_SIZE, avoid_artists=(), rng=None,
+                  taste=None):
     """Seed a batch straight from taste-profile.md.
 
     The profile says to vary seeds and never repeat one back to back, so we
     shuffle the lane rather than walking it in order, and push recently used
     artists to the end instead of dropping them (a short lane would otherwise
     run dry).
+
+    `taste` is what this lane has learned (see library.taste). This is the
+    floor the DJ lands on whenever Claude is missing or slow, so it has to
+    learn too: a seed artist the lane has ruled out is dropped, and the ones
+    it likes go first. Within a band the shuffle still decides, or the floor
+    would play the same favourite every time.
     """
     rng = rng or random
     pool = list((seeds or {}).get(lane) or [])
@@ -40,6 +59,18 @@ def profile_batch(seeds, lane, count=BATCH_SIZE, avoid_artists=(), rng=None):
     rng.shuffle(fresh)
     rng.shuffle(stale)
     ordered = fresh + stale
+
+    if taste:
+        standing = {a: library.score_track(taste, {"artist": a}) for a in ordered}
+        kept = [a for a in ordered if standing[a] > library.DROP_BELOW]
+        # Everything ruled out is a profile the user has outgrown in this
+        # lane -- but an empty batch is worse than an unloved one, so the
+        # ruling only holds while something else is left to play.
+        if kept:
+            ordered = kept
+        # Banded, not sorted outright: a stable sort on the sign keeps the
+        # shuffle's variety inside each band.
+        ordered.sort(key=lambda a: -_band(standing.get(a, 0.0)))
 
     picks = []
     i = 0
