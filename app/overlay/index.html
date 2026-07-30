@@ -264,11 +264,33 @@
     line-height: 1;
     cursor: pointer;
     transition: color 90ms ease;
+    /* The glyph is 17px in a strip 26px tall, and the gaps between the stars
+       were dead ground. The padding makes the target the whole cell; the
+       matching negative margin means the row does not move to pay for it.
+       Halved horizontally against the 3px gap, so neighbouring targets meet
+       exactly rather than overlapping and stealing each other's clicks. */
+    padding: 5px 1.5px;
+    margin: -5px -1.5px;
   }
 
   #stars span.on { color: var(--accent); }
   #stars:hover span { color: var(--dim); }
   #stars span:hover, #stars span:hover ~ span { color: var(--accent); }
+
+  /* A rating is worth seeing land: the stars up to the one pressed swell in
+     turn, left to right, so the click reads as five stars given rather than
+     one glyph changing colour. */
+  @keyframes starpop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.5); }
+    100% { transform: scale(1); }
+  }
+
+  #stars span.pop { animation: starpop 240ms cubic-bezier(.34, 1.56, .64, 1); }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stars span.pop { animation: none; }
+  }
 
   #chip {
     flex: 0 0 auto;
@@ -635,18 +657,30 @@ function render() {
       const star = document.createElement("span");
       star.textContent = "★";
       star.dataset.stars = i;
-      star.onclick = (ev) => {
+      // pointerdown, not click. A click needs the press and the release to
+      // land on the same element, and between the two the window can resize
+      // itself to fit (fitWindow runs on every push) -- the release then
+      // arrives somewhere else and the rating silently never happens. Pressing
+      // is also simply what a star feels like it should answer to.
+      star.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
         ev.stopPropagation();
-        // Clicking the rating you already have clears it.
+        ev.preventDefault();
+        // Pressing the rating you already have clears it.
         const current = (state && state.rating) || 0;
-        send({action: "rate", stars: i === current ? 0 : i});
-      };
+        const given = i === current ? 0 : i;
+        send({action: "rate", stars: given});
+        pop(given || i);
+      });
+      star.addEventListener("animationend", () => star.classList.remove("pop"));
       stars.appendChild(star);
     }
   }
   for (const star of stars.children) {
     const i = +star.dataset.stars;
-    star.className = i <= rating ? "on" : "";
+    // toggle, not className: an assignment would wipe the pop mid-animation,
+    // and the pushes that land during it arrive every second.
+    star.classList.toggle("on", i <= rating);
     star.title = i + (i === 1 ? " star" : " stars") + when;
   }
 
@@ -694,6 +728,21 @@ function fitWindow() {
       pywebview.api.expand(h);
     }
   });
+}
+
+// Swell the stars up to `upTo`, one after another.
+function pop(upTo) {
+  for (const star of el("stars").children) {
+    const i = +star.dataset.stars;
+    star.classList.remove("pop");
+    if (i > upTo) continue;
+    // Reading a layout property between the remove and the add restarts the
+    // animation; without it, re-rating the same row is a no-op to the engine
+    // and nothing moves the second time.
+    void star.offsetWidth;
+    star.style.animationDelay = ((i - 1) * 40) + "ms";
+    star.classList.add("pop");
+  }
 }
 
 // ------------------------------------------------------------------ lyrics
