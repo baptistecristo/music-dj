@@ -1062,8 +1062,8 @@ async def test_the_new_tracks_early_events_are_not_a_user_skip():
 async def test_an_interrupted_tracks_end_is_not_a_completion():
     # An urgent mood change interrupts track A with a play for track B. The
     # player reports A as ended; scoring that as "finished" would inflate
-    # completes (defeating skip_shunned), and advancing on it would cut B
-    # off seconds after it began.
+    # completes (arguing a track back into favour it never earned), and
+    # advancing on it would cut B off seconds after it began.
     tx = FakeTransport()
     dj = make_dj(tx)
     old = await dj.play_next()
