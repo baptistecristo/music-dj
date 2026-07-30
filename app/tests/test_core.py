@@ -156,7 +156,9 @@ async def test_a_one_star_track_is_still_allowed_in_a_different_mood():
     cid = library.queue_tracks(dj.queue)[0]["catalogId"]
     dj.ratings = library.rate({}, {"catalogId": cid, "title": "x", "artist": "y"},
                               "debugging", 1)
-    assert cid not in library.banned_ids(dj.ratings, "coding")
+    track = {"catalogId": cid, "artist": "y"}
+    assert library.rank_by_taste(
+        library.taste(dj.ratings, {}, "focus", dj.now()), [track]) == [track]
 
 
 # ------------------------------------------------------------------ playback
@@ -887,6 +889,70 @@ async def test_two_early_skips_reach_the_picker_as_a_verdict(isolated_storage):
 
 
 @pytest.mark.asyncio
+async def test_a_star_given_while_coding_reaches_the_research_prompt(
+        isolated_storage):
+    # Both draw from the focus lane. Kept apart by mood, a star given in one
+    # was invisible in the other even though the music comes from one pool.
+    dj = make_dj()
+    prompts = watched(dj)
+    track = await dj.play_next()                    # mood is "coding"
+    await dj.on_action({"action": "rate", "stars": 5})
+    dj.mood = "research"
+    prompts.clear()
+    await dj.refill()
+    assert track["title"] in section(prompts[-1], "## They rated these 5 stars")
+
+
+@pytest.mark.asyncio
+async def test_an_artist_they_rate_here_is_offered_ahead_of_a_stranger():
+    # The generalisation that makes a star worth giving: it has to change what
+    # comes next, not just what that one song does if it ever returns.
+    class TwoArtists(FakeTransport):
+        async def call(self, cmd, timeout=None):
+            self.calls.append(cmd)
+            if cmd.get("cmd") == "search":
+                artist = cmd["term"]
+                return {"songs": [{"catalogId": artist + "-new", "title": "New",
+                                   "artist": artist, "artworkUrl": None,
+                                   "durationMs": 200000}]}
+            return {"ok": True}
+
+    dj = make_dj(TwoArtists())
+    dj.picks_for = lambda mood, lane: [
+        {"title": None, "artist": "Sofiane Pamart", "why": "w"},
+        {"title": None, "artist": "Daft Punk", "why": "w"},
+    ]
+    dj.ratings = library.rate({}, {"catalogId": "old", "title": "Something",
+                                   "artist": "Daft Punk"}, "coding", 5)
+    await dj.refill()
+    assert [t["artist"] for t in library.queue_tracks(dj.queue)][0] == "Daft Punk"
+
+
+@pytest.mark.asyncio
+async def test_an_artist_they_have_twice_rejected_here_is_not_offered_again():
+    class FullCredit(FakeTransport):
+        """Search that answers with the whole artist name, as Apple does."""
+        async def call(self, cmd, timeout=None):
+            self.calls.append(cmd)
+            if cmd.get("cmd") == "search":
+                return {"songs": [{"catalogId": "fresh", "title": "Unheard",
+                                   "artist": cmd["term"], "artworkUrl": None,
+                                   "durationMs": 200000}]}
+            return {"ok": True}
+
+    dj = make_dj(FullCredit())
+    for cid in ("a", "b"):
+        dj.ratings = library.rate(dj.ratings,
+                                  {"catalogId": cid, "title": cid,
+                                   "artist": "Al Green"}, "coding", 1)
+    dj.picks_for = lambda mood, lane: [
+        {"title": None, "artist": "Al Green", "why": "w"}]
+    await dj.refill()
+    assert library.queue_tracks(dj.queue) == [], \
+        "offered a fresh song by an artist rejected twice in this lane"
+
+
+@pytest.mark.asyncio
 async def test_a_rating_given_in_one_mood_stays_out_of_another(isolated_storage):
     dj = make_dj()
     prompts = watched(dj)
@@ -897,6 +963,26 @@ async def test_a_rating_given_in_one_mood_stays_out_of_another(isolated_storage)
     await dj.refill()
     assert section(prompts[-1], "## They rated these 5 stars") == "", \
         "a verdict from another mood leaked into this one"
+
+
+@pytest.mark.asyncio
+async def test_a_rewritten_taste_profile_reaches_the_next_batch(isolated_storage):
+    # The advisor re-reads the profile for every batch, so Claude's picks
+    # followed a rewrite immediately. The fallback used seeds parsed once at
+    # startup, so refreshing the profile changed nothing until a restart --
+    # and the fallback is where you land whenever Claude is slow.
+    dj = make_dj()
+    assert "Bill Withers" in dj.seeds["tense"]
+    (isolated_storage / store.PROFILE).write_text(
+        "## Mood → seed directions\n\n"
+        "- **tense / debugging** → warm soul: Lee Fields, Charles Bradley.\n",
+        encoding="utf-8")
+    os.utime(isolated_storage / store.PROFILE, (2e9, 2e9))
+    dj.mood = "debugging"
+    await dj.refill()
+    terms = [c["term"] for c in dj.tx.sent("search")]
+    assert any("Lee Fields" in t or "Charles Bradley" in t for t in terms)
+    assert not any("Bill Withers" in t for t in terms), "picked from a stale profile"
 
 
 @pytest.mark.asyncio
@@ -1032,22 +1118,30 @@ async def test_a_song_that_played_through_still_advances():
 
 
 def test_two_early_skips_shun_a_track_but_a_full_listen_redeems_it():
+    now = 1000.0
     signals = {}
     track = {"catalogId": "c1", "title": "T", "artist": "A"}
     for _ in range(2):
         signals = library.record_signal(signals, track, "coding", "skip",
-                                        10000, 200000, 1000)
-    assert "c1" in library.skip_shunned(signals, "coding")
-    assert "c1" not in library.skip_shunned(signals, "writing")   # per-mood
+                                        10000, 200000, now)
+    shunned = library.taste({}, signals, "focus", now)
+    assert library.rank_by_taste(shunned, [track]) == []
+    # Per lane: skipping it while coding says nothing about writing.
+    assert library.rank_by_taste(
+        library.taste({}, signals, "mellow", now), [track]) == [track]
+
     signals = library.record_signal(signals, track, "coding", "complete",
-                                    200000, 200000, 1000)
-    assert "c1" not in library.skip_shunned(signals, "coding")
+                                    200000, 200000, now)
+    redeemed = library.taste({}, signals, "focus", now)
+    assert library.rank_by_taste(redeemed, [track]) == [track]
 
 
 def test_no_stars_is_neutral_not_negative():
     # A track with no rating and no skips must never be shunned or banned.
-    assert library.skip_shunned({}, "coding") == set()
-    assert library.banned_ids({}, "coding") == set()
+    view = library.taste({}, {}, "focus", 1000.0)
+    track = {"catalogId": "c1", "artist": "Nobody Rated"}
+    assert library.score_track(view, track) == 0
+    assert library.rank_by_taste(view, [track]) == [track]
 
 
 @pytest.mark.asyncio

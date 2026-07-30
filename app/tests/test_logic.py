@@ -234,16 +234,18 @@ def test_ratings_are_scoped_per_mood():
     assert r["1556503755"]["byMood"] == {"debugging": 1, "energized": 5}
 
 
-def test_one_star_in_one_mood_does_not_ban_a_track_elsewhere():
+def test_one_star_in_one_lane_does_not_ban_a_track_elsewhere():
     r = library.rate({}, TRACK, "debugging", 1)
-    assert "1556503755" in library.banned_ids(r, "debugging")
-    assert "1556503755" not in library.banned_ids(r, "energized")
+    here = library.taste(r, {}, "tense", NOW)
+    elsewhere = library.taste(r, {}, "energized", NOW)
+    assert library.rank_by_taste(here, [TRACK]) == []
+    assert library.rank_by_taste(elsewhere, [TRACK]) == [TRACK]
 
 
 def test_rating_stores_title_and_artist_for_the_claude_prompt():
     r = library.rate({}, TRACK, "energized", 5)
-    assert library.rated_in_mood(r, "energized", 5)[0]["artist"] == "Folamour"
-    assert library.rated_in_mood(r, "energized", 1) == []
+    assert library.rated_in_lane(r, "energized", 5)[0]["artist"] == "Folamour"
+    assert library.rated_in_lane(r, "energized", 1) == []
 
 
 def test_rerating_replaces_within_that_mood_only():
@@ -351,6 +353,168 @@ def test_an_overlong_reason_is_truncated_for_the_strip():
 
 # ------------------------------------------------------ resolving to a track
 
+# --------------------------------------------------------------- taste
+#
+# The point of all of it: a star given today has to change what gets offered
+# tomorrow, including songs that have never come up before.
+
+NOW = 1_700_000_000.0
+DAY = 86400.0
+
+
+def rated(cid, title, artist, mood, stars):
+    return library.rate({}, {"catalogId": cid, "title": title,
+                             "artist": artist}, mood, stars)
+
+
+def skipped(cid, title, artist, mood, times, at=NOW):
+    signals = {}
+    for _ in range(times):
+        signals = library.record_signal(
+            signals, {"catalogId": cid, "title": title, "artist": artist},
+            mood, "skip", 5000, 200000, at)
+    return signals
+
+
+def test_a_star_given_while_coding_counts_while_researching():
+    # Both are the focus lane, and the queue is built per lane. Kept apart,
+    # five labels shared out the evidence until no batch ever saw any.
+    view = library.taste(rated("c1", "T", "A", "coding", 5), {}, "focus", NOW)
+    assert view["tracks"]["c1"] > 0
+    assert library.score_track(view, {"catalogId": "c1", "artist": "A"}) > 0
+
+
+def test_a_star_given_while_coding_says_nothing_about_a_late_night():
+    view = library.taste(rated("c1", "T", "A", "coding", 5), {}, "loose", NOW)
+    assert view["tracks"] == {} and view["artists"] == {}
+
+
+def test_a_verdict_carries_to_the_artists_other_songs():
+    # The whole reason this exists: you meet the same track twice a year, so a
+    # per-track verdict is spent on a track that never comes back.
+    view = library.taste(rated("c1", "Known", "Al Green", "coding", 5), {},
+                         "focus", NOW)
+    unheard = {"catalogId": "never-played", "artist": "Al Green"}
+    assert library.score_track(view, unheard) > 0
+
+
+def test_the_artists_claim_is_weaker_than_a_verdict_on_the_song():
+    view = library.taste(rated("c1", "Known", "Al Green", "coding", 5), {},
+                         "focus", NOW)
+    known = library.score_track(view, {"catalogId": "c1", "artist": "Al Green"})
+    unheard = library.score_track(view, {"catalogId": "x", "artist": "Al Green"})
+    assert known > unheard > 0
+
+
+def test_two_one_stars_stop_the_artist_being_offered_in_that_lane():
+    ratings = rated("c1", "One", "Someone", "coding", 1)
+    ratings = library.rate(ratings, {"catalogId": "c2", "title": "Two",
+                                     "artist": "Someone"}, "coding", 1)
+    view = library.taste(ratings, {}, "focus", NOW)
+    fresh = [{"catalogId": "c3", "artist": "Someone", "title": "Three"}]
+    assert library.rank_by_taste(view, fresh) == []
+
+
+def test_one_bad_afternoon_is_not_a_verdict_on_the_artist():
+    view = library.taste(rated("c1", "One", "Someone", "coding", 1), {},
+                         "focus", NOW)
+    fresh = [{"catalogId": "c3", "artist": "Someone"}]
+    assert library.rank_by_taste(view, fresh) == fresh, "banned on one rating"
+
+
+def test_one_songs_own_record_is_not_also_evidence_about_its_artist():
+    # The artist term exists to say something about the songs we have NOT
+    # heard a verdict on. Counting the song's own record inside it too made a
+    # single track's bad run read as a pattern across the artist -- enough to
+    # bury a track that its own full listen should have redeemed.
+    signals = skipped("c1", "T", "A", "coding", 2)
+    signals = library.record_signal(signals, {"catalogId": "c1", "title": "T",
+                                              "artist": "A"},
+                                    "coding", "complete", 200000, 200000, NOW)
+    view = library.taste({}, signals, "focus", NOW)
+    track = {"catalogId": "c1", "artist": "A"}
+    assert library.score_track(view, track) == view["tracks"]["c1"], \
+        "the song's own record was counted twice"
+    assert library.rank_by_taste(view, [track]) == [track]
+
+
+def test_an_old_skip_weighs_less_than_a_recent_one():
+    recent = library.taste({}, skipped("c1", "T", "A", "coding", 2, NOW),
+                           "focus", NOW)
+    stale = library.taste({}, skipped("c1", "T", "A", "coding", 2,
+                                      NOW - 180 * DAY), "focus", NOW)
+    assert stale["tracks"]["c1"] > recent["tracks"]["c1"]
+    assert stale["tracks"]["c1"] < 0, "age turned a verdict into approval"
+
+
+def test_a_verdict_with_no_date_stands_still_rather_than_vanishing():
+    # Rows written before signals carried a timestamp. Discarding them would
+    # throw away somebody's history on an upgrade.
+    assert library.decayed(-2.0, None, NOW) == -2.0
+
+
+def test_silence_is_neutral_and_leaves_the_pickers_order_alone():
+    view = library.taste({}, {}, "focus", NOW)
+    picks = [{"catalogId": "a", "artist": "One"},
+             {"catalogId": "b", "artist": "Two"},
+             {"catalogId": "c", "artist": "Three"}]
+    assert library.rank_by_taste(view, picks) == picks
+
+
+def test_what_they_rated_highest_is_offered_first():
+    ratings = rated("b", "Loved", "Two", "coding", 5)
+    view = library.taste(ratings, {}, "focus", NOW)
+    picks = [{"catalogId": "a", "artist": "One"},
+             {"catalogId": "b", "artist": "Two"}]
+    assert [t["catalogId"] for t in library.rank_by_taste(view, picks)] == ["b", "a"]
+
+
+def test_a_full_listen_counts_for_less_than_a_star():
+    listened = library.record_signal({}, {"catalogId": "c1", "title": "T",
+                                          "artist": "A"},
+                                     "coding", "complete", 200000, 200000, NOW)
+    played = library.taste({}, listened, "focus", NOW)["tracks"]["c1"]
+    starred = library.taste(rated("c1", "T", "A", "coding", 5), {},
+                            "focus", NOW)["tracks"]["c1"]
+    assert 0 < played < starred, "leaving it on read as loving it"
+
+
+def test_a_verdict_carries_across_how_apple_spells_the_credit():
+    # The rated track came back as "Daft Punk" and the next one as "Daft Punk
+    # feat. Julian Casablancas". Matched literally the star would not carry,
+    # which is the one thing it is for.
+    view = library.taste(rated("c1", "T", "Daft Punk", "coding", 5), {},
+                         "focus", NOW)
+    for spelling in ["Daft Punk feat. Julian Casablancas",
+                     "Daft Punk & Pharrell Williams", "daft punk"]:
+        assert library.score_track(view, {"catalogId": "x",
+                                          "artist": spelling}) > 0, spelling
+
+
+def test_a_short_name_is_not_matched_by_coincidence():
+    # "Air" sits inside "Airbourne" and a hundred other strings.
+    view = library.taste(rated("c1", "T", "Air", "coding", 1), {}, "focus", NOW)
+    assert library.score_track(view, {"catalogId": "x",
+                                      "artist": "Airbourne"}) == 0
+
+
+def test_the_definite_article_is_not_a_different_band():
+    view = library.taste(rated("c1", "T", "The Beatles", "coding", 5), {},
+                         "focus", NOW)
+    assert library.score_track(view, {"catalogId": "x", "artist": "Beatles"}) > 0
+
+
+def test_the_artist_lists_name_who_lands_and_who_does_not():
+    ratings = rated("c1", "Good", "Bill Withers", "coding", 5)
+    ratings = library.rate(ratings, {"catalogId": "c2", "title": "Bad",
+                                     "artist": "Noisy Band"}, "coding", 1)
+    liked, disliked = library.artists_by_verdict(
+        library.taste(ratings, {}, "focus", NOW))
+    # Spelled as the store has them, not flattened into the match key.
+    assert "Bill Withers" in liked and "Noisy Band" not in liked
+    assert "Noisy Band" in disliked and "Bill Withers" not in disliked
+
+
 # ------------------------------------------------- a swap echo vs a real end
 
 def test_an_end_seconds_into_a_long_track_is_an_echo():
@@ -374,6 +538,54 @@ def test_an_end_from_a_page_that_does_not_report_the_playhead_is_trusted():
 
 def test_a_long_way_in_with_no_duration_known_is_real():
     assert not library.ended_too_early({"position": 120000})
+
+
+# ------------------------------------------- the floor learns as well
+
+SEED_LANE = {"focus": ["Loved Act", "Plain Act", "Rejected Act"]}
+
+
+def taste_for(pairs):
+    """A taste view built straight from (artist, stars) pairs."""
+    ratings = {}
+    for i, (artist, stars) in enumerate(pairs):
+        ratings = library.rate(ratings, {"catalogId": "c%d" % i,
+                                         "title": "T%d" % i, "artist": artist},
+                               "coding", stars)
+    return library.taste(ratings, {}, "focus", NOW)
+
+
+def test_the_profile_floor_leads_with_an_artist_they_rate_here():
+    view = taste_for([("Loved Act", 5)])
+    picks = picker.profile_batch(SEED_LANE, "focus", count=3,
+                                 rng=random.Random(0), taste=view)
+    assert picks[0]["artist"] == "Loved Act"
+
+
+def test_the_profile_floor_drops_a_seed_the_lane_has_ruled_out():
+    view = taste_for([("Rejected Act", 1), ("Rejected Act", 1)])
+    picks = picker.profile_batch(SEED_LANE, "focus", count=6,
+                                 rng=random.Random(0), taste=view)
+    assert picks, "the floor went silent"
+    assert "Rejected Act" not in [p["artist"] for p in picks]
+
+
+def test_the_floor_would_rather_play_an_unloved_seed_than_nothing():
+    # Every seed in the lane ruled out. Silence is worse than an imperfect
+    # song, and the profile is all there is to fall back on.
+    view = taste_for([(a, 1) for a in SEED_LANE["focus"] for _ in (0, 1)])
+    picks = picker.profile_batch(SEED_LANE, "focus", count=3,
+                                 rng=random.Random(0), taste=view)
+    assert picks, "ruled out every seed and played nothing"
+
+
+def test_the_floor_still_varies_when_it_has_learned_nothing():
+    empty = library.taste({}, {}, "focus", NOW)
+    first = [p["artist"] for p in picker.profile_batch(
+        SEED_LANE, "focus", count=3, rng=random.Random(1), taste=empty)]
+    second = [p["artist"] for p in picker.profile_batch(
+        SEED_LANE, "focus", count=3, rng=random.Random(7), taste=empty)]
+    assert first != second, "the floor became deterministic"
 
 
 def test_resolution_prefers_the_artist_we_asked_for():

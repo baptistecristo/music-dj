@@ -34,6 +34,7 @@ class DJ:
         self.picks_for = picks_for or self._profile_picks
 
         self.seeds = moods.parse_seeds(store.read_text(store.PROFILE))
+        self._seeds_at = store.mtime(store.PROFILE)
         self.ratings = store.read_json(store.RATINGS, {})
         self.history = store.read_json(store.HISTORY, {})
         self.signals = store.read_json(store.SIGNALS, {})
@@ -78,8 +79,25 @@ class DJ:
 
     def _profile_picks(self, mood, lane):
         recent = [p.get("artist") for p in (self.history.get("plays") or [])[:12]]
-        return picker.profile_batch(self.seeds, lane, avoid_artists=recent,
-                                    rng=self.rng)
+        return picker.profile_batch(
+            self.seeds, lane, avoid_artists=recent, rng=self.rng,
+            taste=library.taste(self.ratings, self.signals, lane, self.now()))
+
+    def refresh_seeds(self):
+        """Re-read taste-profile.md if it has changed since we last looked.
+
+        The advisor reads the profile off disk for every batch, so a refreshed
+        profile reaches Claude's picks straight away. The fallback path had no
+        such luck: it picked from seeds parsed once at startup, so rewriting
+        the profile changed nothing until the daemon was restarted -- and the
+        fallback is exactly where you land when Claude is slow.
+        """
+        stamp = store.mtime(store.PROFILE)
+        if stamp == self._seeds_at:
+            return
+        self._seeds_at = stamp
+        self.seeds = moods.parse_seeds(store.read_text(store.PROFILE))
+        log.info("taste profile changed; %d lanes re-read", len(self.seeds))
 
     def subscribe(self, fn):
         self.listeners.append(fn)
@@ -227,6 +245,7 @@ class DJ:
         # flight is usually a mood change, and dropping it left the new mood
         # holding the empty queue set_mood() just built, with nothing playing.
         async with self._refill_lock:
+            self.refresh_seeds()
             mood, lane = self.mood, self.lane
             # The Claude picker shells out and can sit there for 15s. Run it
             # off the event loop or playback events queue up behind it and the
@@ -247,17 +266,16 @@ class DJ:
                 resolved, self.history,
                 already_queued=library.queue_tracks(self.queue))
 
-            banned = library.banned_ids(self.ratings, mood)
-            resolved = [t for t in resolved if str(t["catalogId"]) not in banned]
-
-            # Repeated early skips shun a track in this mood. A 4-5 star
-            # rating outranks the skips; having no rating at all is neutral
-            # and never counts against anything.
-            shunned = library.skip_shunned(self.signals, mood)
-            for stars in (4, 5):
-                shunned -= {str(e["catalogId"])
-                            for e in library.rated_in_mood(self.ratings, mood, stars)}
-            resolved = [t for t in resolved if str(t["catalogId"]) not in shunned]
+            # Everything this lane has taught us, per track and per artist:
+            # what it argues against is dropped, and the rest is ordered
+            # best-first. Silence is neutral -- an unrated track scores zero
+            # and keeps the position the picker gave it.
+            view = library.taste(self.ratings, self.signals, lane, self.now())
+            before = len(resolved)
+            resolved = library.rank_by_taste(view, resolved)
+            if before != len(resolved):
+                log.info("dropped %d pick(s) this lane has already argued "
+                         "against", before - len(resolved))
 
             # Already in one of their playlists = already found. Offer what
             # they have not curated yet.

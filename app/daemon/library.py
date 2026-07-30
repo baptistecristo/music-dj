@@ -5,6 +5,8 @@ clock beyond what the caller passes in. That is what makes the daemon testable
 without a browser.
 """
 
+from . import moods
+
 HISTORY_LIMIT = 200          # what we keep on disk
 RECENT_FOR_DEDUPE = 30       # how far back "played recently" reaches
 REFILL_AT = 3                # refill the queue when it drops to this many
@@ -141,11 +143,19 @@ def rating_for(ratings, catalog_id, mood):
     return int((entry.get("byMood") or {}).get(mood, 0))
 
 
-def rated_in_mood(ratings, mood, stars):
-    """Tracks rated exactly `stars` in `mood` -- feeds the Claude prompt."""
-    out = []
+def rated_in_lane(ratings, lane, stars, lane_of=moods.lane_for):
+    """Tracks rated exactly `stars` anywhere in this lane -- for the prompt.
+
+    Pooled across every mood that draws from the lane, because that is what
+    the batch is built for: a star given while coding is evidence for
+    research too, since both are focus.
+    """
+    out, seen = [], set()
     for cid, entry in (ratings or {}).items():
-        if int((entry.get("byMood") or {}).get(mood, 0)) == stars:
+        for mood, value in ((entry or {}).get("byMood") or {}).items():
+            if cid in seen or lane_of(mood) != lane or int(value) != stars:
+                continue
+            seen.add(cid)
             out.append({"catalogId": cid,
                         "title": entry.get("title"),
                         "artist": entry.get("artist")})
@@ -156,11 +166,11 @@ def rated_in_mood(ratings, mood, stars):
 #
 # What they do is a rating they never typed: skipping a song ten seconds in
 # says more than any star, and letting one play to the end is a quiet nod.
-# Withholding stars says nothing at all -- unrated stays strictly neutral,
-# and only repeated early skips ever count against a track.
+# Withholding stars says nothing at all -- unrated stays strictly neutral.
+# What these add up to is worked out under "taste" below; this half only
+# records them.
 
 EARLY_SKIP_FRACTION = 0.4     # skipped before 40% through counts as a verdict
-EARLY_SKIP_STRIKES = 2        # how many early skips before we stop offering it
 
 
 def record_signal(signals, track, mood, kind, position_ms, duration_ms, now):
@@ -187,34 +197,200 @@ def record_signal(signals, track, mood, kind, position_ms, duration_ms, now):
     return signals
 
 
-def skip_shunned(signals, mood):
-    """Ids skipped early often enough to stop offering in this mood.
-
-    A track they also let play to the end keeps its chances -- one bad moment
-    is not a verdict when there are full listens on record.
-    """
-    out = set()
-    for cid, entry in (signals or {}).items():
-        m = ((entry or {}).get("byMood") or {}).get(mood) or {}
-        if m.get("earlySkips", 0) >= EARLY_SKIP_STRIKES \
-                and not m.get("completes", 0):
-            out.add(str(cid))
-    return out
-
-
-def often_skipped(signals, mood, limit=10):
-    """Human-readable list of what they keep skipping, for the advisor."""
+def often_skipped_in_lane(signals, lane, limit=10, lane_of=moods.lane_for):
+    """What they keep skipping in this lane, worst first, for the advisor."""
     rows = []
     for entry in (signals or {}).values():
-        m = ((entry or {}).get("byMood") or {}).get(mood) or {}
-        if m.get("earlySkips", 0) >= 1 and entry.get("title"):
-            rows.append((m.get("earlySkips", 0),
-                         "%s — %s" % (entry["title"], entry.get("artist"))))
+        early = sum((m or {}).get("earlySkips", 0)
+                    for mood, m in ((entry or {}).get("byMood") or {}).items()
+                    if lane_of(mood) == lane)
+        if early >= 1 and entry.get("title"):
+            rows.append((early, "%s — %s" % (entry["title"], entry.get("artist"))))
     rows.sort(reverse=True)
     return [name for _n, name in rows[:limit]]
 
 
-def banned_ids(ratings, mood):
-    """One star in this mood means don't play it in this mood again."""
-    return {cid for cid, entry in (ratings or {}).items()
-            if int((entry.get("byMood") or {}).get(mood, 0)) == 1}
+# ------------------------------------------------------------------- taste
+#
+# What the stars and the skips add up to. Three ideas, taken from how the
+# ListenBrainz playlist engine (troi) uses its feedback:
+#
+# - Pool by lane, not by mood. Verdicts are recorded against the mood they
+#   were given in, but the music is picked per lane, and coding and research
+#   both draw from focus. Keeping them apart split five labels' worth of thin
+#   evidence where there were only ever a handful of lanes underneath.
+# - Carry the verdict to the artist. A catalogue has tens of millions of
+#   songs and you meet the same one twice a year, so a per-track verdict is
+#   spent on a track that never comes back. The artist is the cheapest
+#   similarity edge we have, and it is already on every row we store.
+# - Score, do not ban. One bad afternoon is not a verdict, and a verdict from
+#   March should not weigh the same as one from yesterday.
+
+STAR_VALUE = {1: -2.0, 2: -0.5, 3: 0.0, 4: 1.0, 5: 2.0}
+EARLY_SKIP_VALUE = -0.75     # per early skip
+COMPLETE_VALUE = 0.25        # per full listen -- weak: it may just be on
+HALF_LIFE_DAYS = 45.0        # a verdict is worth half this much, this long on
+ARTIST_WEIGHT = 0.5          # an artist verdict next to a verdict on the track
+ARTIST_CAP = 3.0             # ...and no artist outvotes the profile outright
+DROP_BELOW = -1.5            # at or under this, stop offering it
+
+
+def decayed(value, at, now, half_life=HALF_LIFE_DAYS):
+    """Fade a verdict by its age. An undated one never fades.
+
+    Undated rows are the ones written before signals carried a timestamp;
+    treating them as brand new would be wrong, but so would discarding
+    somebody's ratings on an upgrade, so they simply stand still.
+    """
+    if not at or not now:
+        return value
+    days = max(0.0, (now - at) / 86400.0)
+    return value * (0.5 ** (days / half_life))
+
+
+# Apple's artist string for the same act is not stable: the track you rated
+# came back as "Daft Punk" and the next one as "Daft Punk feat. Julian
+# Casablancas". Matched literally, the verdict would not carry -- which is the
+# one thing this is for.
+_CREDIT_SPLITS = (" feat.", " feat ", " featuring ", " ft. ", " ft ",
+                  " with ", " presents", " vs. ", " vs ", " & friends")
+MIN_ARTIST_MATCH = 4          # below this, containment is coincidence
+
+
+def _artist_key(name):
+    key = (name or "").strip().lower()
+    for token in _CREDIT_SPLITS:
+        cut = key.find(token)
+        if cut > 0:
+            key = key[:cut]
+    if key.startswith("the "):
+        key = key[4:]
+    return " ".join(key.split())
+
+
+def _artist_score(artists, name):
+    """This artist's standing, tolerating how the name came back.
+
+    Exact first; then containment either way, so "Daft Punk" and "Daft Punk &
+    Pharrell" are recognised as the same claim. Short names are matched only
+    exactly -- "Air" is inside far too many strings to mean anything.
+    """
+    key = _artist_key(name)
+    if not key:
+        return 0.0
+    if key in artists:
+        return artists[key]
+    if len(key) < MIN_ARTIST_MATCH:
+        return 0.0
+    best = 0.0
+    for known, value in artists.items():
+        if len(known) < MIN_ARTIST_MATCH:
+            continue
+        if key in known or known in key:
+            # The strongest claim wins rather than the first one iterated, so
+            # the answer does not depend on dict order.
+            if abs(value) > abs(best):
+                best = value
+    return best
+
+
+def taste(ratings, signals, lane, now, lane_of=moods.lane_for):
+    """Everything learned that bears on this lane.
+
+    Returns {"tracks": {catalogId: score}, "artists": {key: score},
+    "seenAs": {key: name}}, where a positive score is evidence for and a
+    negative one evidence against, and seenAs remembers how each artist was
+    actually spelled.
+    """
+    tracks, artists, seen_as = {}, {}, {}
+
+    def add(cid, artist, value, at):
+        value = decayed(value, at, now)
+        if not value:
+            return
+        tracks[str(cid)] = tracks.get(str(cid), 0.0) + value
+        key = _artist_key(artist)
+        if key:
+            artists[key] = artists.get(key, 0.0) + value
+            # Keep how it was spelled, so the prompt can name the artist the
+            # way the store does rather than in the flattened match key.
+            seen_as.setdefault(key, (artist or "").strip() or key)
+
+    for cid, entry in (ratings or {}).items():
+        for mood, stars in ((entry or {}).get("byMood") or {}).items():
+            if lane_of(mood) != lane:
+                continue
+            # Ratings carry no timestamp of their own: a star is a considered
+            # verdict, and it stands until it is changed.
+            add(cid, entry.get("artist"), STAR_VALUE.get(int(stars), 0.0), None)
+
+    for cid, entry in (signals or {}).items():
+        for mood, m in ((entry or {}).get("byMood") or {}).items():
+            if lane_of(mood) != lane:
+                continue
+            at = (m or {}).get("lastAt")
+            value = (EARLY_SKIP_VALUE * (m.get("earlySkips") or 0)
+                     + COMPLETE_VALUE * (m.get("completes") or 0))
+            add(cid, entry.get("artist"), value, at)
+
+    # Left uncapped here: score_track has to take this track's own verdict
+    # back out before capping, or the cap would be applied to a number that
+    # still has the track itself inside it.
+    return {"tracks": tracks, "artists": artists, "seenAs": seen_as}
+
+
+def score_track(view, track):
+    """How much this lane's history argues for or against one candidate.
+
+    Two terms: what was said about this song, and what was said about the rest
+    of the artist's. The second counts half -- a weaker claim than a verdict on
+    the song itself, but the only claim available for a song that has never
+    come up before, which is nearly all of them.
+
+    The artist term deliberately excludes this song. Counting it twice made a
+    single track's own bad run look like a pattern across the artist, which
+    was enough to bury a track its one full listen should have redeemed.
+    """
+    view = view or {}
+    tracks = view.get("tracks") or {}
+    artists = view.get("artists") or {}
+    cid = str((track or {}).get("catalogId") or "")
+    own = tracks.get(cid, 0.0)
+
+    key = _artist_key((track or {}).get("artist"))
+    if key in artists:
+        theirs = artists[key] - own          # everything else by them
+    else:
+        theirs = _artist_score(artists, (track or {}).get("artist"))
+    # Capped so a run of bad luck with one prolific artist cannot bury a whole
+    # lane, and a favourite cannot crowd out everything else.
+    theirs = max(-ARTIST_CAP, min(ARTIST_CAP, theirs))
+    return own + theirs * ARTIST_WEIGHT
+
+
+def rank_by_taste(view, tracks):
+    """Best-first, dropping what this lane has argued against.
+
+    Stable, so an order the picker chose deliberately survives wherever the
+    evidence is silent -- which, for a fresh lane, is everywhere.
+    """
+    scored = [(score_track(view, t), i, t) for i, t in enumerate(tracks or [])]
+    kept = [(s, i, t) for s, i, t in scored if s > DROP_BELOW]
+    kept.sort(key=lambda row: (-row[0], row[1]))
+    return [t for _s, _i, t in kept]
+
+
+def artists_by_verdict(view, limit=8):
+    """(liked, disliked) artist names for this lane, strongest first.
+
+    For the prompt: naming who lands and who does not is what turns a pile of
+    per-track stars into something a picker can actually act on.
+    """
+    seen_as = (view or {}).get("seenAs") or {}
+    rows = sorted(((v, k) for k, v in ((view or {}).get("artists") or {}).items()),
+                  reverse=True)
+    # Named as the store spells them, not as the match key flattens them.
+    liked = [seen_as.get(k, k) for value, k in rows if value >= 1.0][:limit]
+    disliked = [seen_as.get(k, k)
+                for value, k in reversed(rows) if value <= -1.0][:limit]
+    return liked, disliked
