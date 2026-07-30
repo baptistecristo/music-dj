@@ -48,6 +48,7 @@ class DJ:
         self.pinned = False
         self.current = None
         self.notice = None
+        self.preparing = None        # mood whose lane is being built, if any
         self.setup = None            # playlist picker payload, when offered
         self.lyrics = None           # {"catalogId", "ttml"} for the current track
         self.previews_only = False
@@ -124,6 +125,9 @@ class DJ:
             "rating": rating,
             "connected": bool(self.tx.connected),
             "notice": self.notice,
+            # Named rather than implied: silence with a lane being built behind
+            # it is a different thing from silence with nothing coming.
+            "preparing": self.preparing,
             "setup": self.setup,
             "lyrics": self.lyrics,
         }
@@ -148,19 +152,49 @@ class DJ:
         log.info("mood -> %s (%s)", mood, "pinned" if self.pinned else "inferred")
         self.mood = mood
         self.queue = library.make_queue([], mood, self.lane, "profile", self.now())
-        await self.refill()
 
-        # Cutting a song off partway is jarring, and moods drift while you work.
-        # So the new lane starts at the next track boundary -- except for the
-        # moods that mean something just broke, where the whole point is that
-        # calmer music arrives while it still matters. Pinning a mood by hand
-        # is an explicit request, so that switches now too.
-        if self.current and not (self.is_urgent(mood) or self.pinned):
+        # Cutting a song off partway is jarring, and moods drift while you
+        # work. So a new lane starts at the next track boundary and only the
+        # queue behind it changes -- picking one by hand included: the ask is
+        # for what to play next, not for this song to be thrown away. The one
+        # exception is a mood that means something just broke, where the whole
+        # point is that calmer music arrives while it still matters; nobody
+        # asked for that one, so nothing of theirs is being interrupted.
+        if self.current and not (self.is_urgent(mood) and not force):
+            self.notice = "%s from the next song" % mood
+            self.push()          # the click has an answer before the searching
+            await self.refill()
             log.info("queued %s for the next track; letting this one finish",
                      self.lane)
             self.push()
             return
+
+        # Nothing is playing, so there is nothing to wait for -- but building a
+        # lane is a picker run plus a search per track, ten or twenty seconds
+        # of silence with no explanation. Say what is being built.
+        await self.hush()
+        try:
+            await self.refill()
+        finally:
+            self.preparing = None
         await self.play_next()
+
+    async def hush(self):
+        """Announce the wait while the next lane is built.
+
+        Reached with nothing playing, so there is normally nothing to silence
+        -- but `playing` follows what the player last reported and can be a
+        push behind, and a leftover track under a lane that no longer exists
+        is worth stopping rather than letting it run into the switch.
+        """
+        self.preparing = self.mood
+        if self.playing:
+            await self.tx.call({"cmd": "pause"}, timeout=5)
+        self.playing = False
+        self.current = None
+        self.lyrics = None
+        self.notice = None
+        self.push()
 
     def is_urgent(self, mood):
         urgent = self.config.get("urgent_moods") or ["debugging"]
@@ -297,8 +331,11 @@ class DJ:
         still None. A caller polling on that alone starts a second track over
         the first a couple of seconds in, which is what it sounds like: a song
         begins, then gets replaced. The in-flight check is the fix.
+
+        A lane being built is the same situation one step earlier: the silence
+        is deliberate and the queue behind it is half-written.
         """
-        if self.current is not None or self._play_lock.locked():
+        if self.current is not None or self.preparing or self._play_lock.locked():
             return None
         return await self.play_next()
 
@@ -467,6 +504,17 @@ class DJ:
             if ended and playing and str(ended) != str(playing):
                 log.debug("ignoring trackEnded for %s; we are on %s",
                           ended, playing)
+                return
+            # The end that names the right song can still be the queue swap
+            # echoing: the teardown is reported after the player has already
+            # adopted the new item, so the echo arrives wearing its name. The
+            # page gags that report for a few seconds, but a slow swap outlives
+            # the gag -- and then a song gets burned five seconds in. How far
+            # the playhead actually got is the tell.
+            if self.current and library.ended_too_early(evt):
+                log.info("ignoring an end %sms into %s -- that is the queue "
+                         "swap echoing, not the song finishing",
+                         evt.get("position"), self.current.get("title"))
                 return
             # A song played to its end is a quiet nod in this mood.
             if self.current:

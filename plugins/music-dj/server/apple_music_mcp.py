@@ -15,7 +15,7 @@ import musicdj  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
 # Keep in sync with .claude-plugin/plugin.json and SKILL.md metadata.
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 TOOLS = [
     {

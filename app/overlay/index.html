@@ -14,11 +14,13 @@
     --text: #f2f2f4;
     --muted: #9a9aa6;
     --dim: #62626e;
-    --gold: #f5c451;
+    /* One accent, and it is not yellow: stars, a lit lyrics button and a
+       pinned mood all mean "you chose this", so they share a colour. Rose
+       reads as chosen against the neutral greys without going gold. */
+    --accent: #ef5f74;
     --chip: #2c2c34;
     --hairline: #32323c;
     --green: #57c77f;
-    --amber: #e0a33e;
 
     --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
     --utility: "Bahnschrift", "Segoe UI", sans-serif;
@@ -248,7 +250,7 @@
   }
 
   #controls button:hover { color: var(--text); }
-  #controls button:focus-visible { outline: 1px solid var(--gold); outline-offset: 3px; }
+  #controls button:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
 
   #playpause { font-size: 19px; color: var(--text); }
 
@@ -264,9 +266,9 @@
     transition: color 90ms ease;
   }
 
-  #stars span.on { color: var(--gold); }
+  #stars span.on { color: var(--accent); }
   #stars:hover span { color: var(--dim); }
-  #stars span:hover, #stars span:hover ~ span { color: var(--gold); }
+  #stars span:hover, #stars span:hover ~ span { color: var(--accent); }
 
   #chip {
     flex: 0 0 auto;
@@ -294,14 +296,14 @@
     background: var(--green);
   }
 
-  #chip.pinned #dot { background: var(--amber); }
+  #chip.pinned #dot { background: var(--accent); }
 
   #moodname { overflow: hidden; text-overflow: ellipsis; }
 
   /* ---------------------------------------------------------------- lyrics */
 
   #lyricsbtn { margin-right: 9px; }
-  #lyricsbtn.on { color: var(--gold) !important; }
+  #lyricsbtn.on { color: var(--accent) !important; }
 
   #right { display: flex; align-items: center; flex: 0 0 auto; }
 
@@ -553,6 +555,9 @@ let lyricsAsked = null;     // catalogId last requested, to ask only once
 let lyricsAskedAt = 0;      // when, so a request that never lands can retry
 let lyricsStalled = false;  // at least one retry: stop promising, say so
 let lyricsLines = [];       // [{t: ms|null, el: node}]
+let lyricsNow = null;       // the line currently lit, so moves are one-off
+let posBase = 0;            // last playhead the daemon reported...
+let posAt = 0;              // ...and the wall clock when it landed
 let lastFit = 0;            // last height asked of the window
 let veiled = false;         // window faded out because playback is paused
 let veilTimer = null;
@@ -571,7 +576,13 @@ function render() {
   const np = state && state.nowPlaying;
   document.body.classList.toggle("disconnected", !(state && state.connected));
 
-  if (np && np.title) {
+  // A pinned mood goes quiet while its lane is built, which takes long enough
+  // that unexplained silence reads as a click that did nothing.
+  const prep = state && state.preparing;
+  if (prep) {
+    el("title").textContent = "Lining up " + prep;
+    el("sub").textContent = "picking tracks…";
+  } else if (np && np.title) {
     el("title").textContent = np.title;
     // Apple's second line is "Artist — Album"; the daemon may not know the
     // album, in which case the artist stands alone rather than trailing a dash.
@@ -751,6 +762,7 @@ function renderLyrics() {
     lyricsFor = key;
     box.innerHTML = "";
     lyricsLines = [];
+    lyricsNow = null;           // its node went with the innerHTML
     if (!have) {
       const d = document.createElement("div");
       d.className = "meta";
@@ -784,20 +796,59 @@ function renderLyrics() {
       : "fetching lyrics…";
   }
 
-  // Follow the song: light the line the playhead is in and keep it centred.
-  const pos = (np.position || 0);
+  follow();
+}
+
+// Where the playhead is *now*, not where the last push said it was.
+//
+// Position arrives with the state, about once a second, so lighting the words
+// off those alone runs up to a beat behind and lands in steps. Between pushes
+// the wall clock is a better estimate -- capped, so a socket that goes quiet
+// cannot let the highlight run away down the song on its own.
+function playheadMs() {
+  const np = state && state.nowPlaying;
+  if (!np) return 0;
+  const at = np.position || 0;
+  if (!np.playing) return at;
+  const ahead = Math.min(Math.max(0, Date.now() - posAt), 2000);
+  const dur = np.duration || 0;
+  return dur ? Math.min(at + ahead, dur) : at + ahead;
+}
+
+// Called on every push and ten times a second in between.
+function follow() {
+  if (!lyricsOpen || !lyricsLines.length) return;
+  const pos = playheadMs();
   let current = null;
   for (const line of lyricsLines) {
     if (line.t != null && line.t <= pos) current = line;
   }
-  for (const line of lyricsLines) {
-    line.el.classList.toggle("now", line === current);
+  if (current === lyricsNow) return;
+  if (lyricsNow) lyricsNow.el.classList.remove("now");
+  lyricsNow = current;
+  if (!current) return;
+  current.el.classList.add("now");
+  // Only when the line actually changes. Re-centring on every tick pinned the
+  // pane in place: scrolling back to read an earlier line was undone before
+  // you got there.
+  const box = el("lyrics");
+  const want = current.el.offsetTop - box.clientHeight / 2 +
+               current.el.offsetHeight / 2;
+  box.scrollTo({top: Math.max(0, want), behavior: "smooth"});
+}
+
+// The scrubber moves on the same clock, for the same reason: a bar that
+// advances once a second reads as a stutter next to the words.
+function tick() {
+  const np = state && state.nowPlaying;
+  if (np && np.playing) {
+    const pos = playheadMs();
+    const dur = np.duration || 0;
+    el("bar").style.width = (dur ? Math.min(100, (pos / dur) * 100) : 0) + "%";
+    el("elapsed").textContent = clock(pos);
+    el("remain").textContent = "-" + clock(dur ? Math.max(0, dur - pos) : 0);
   }
-  if (current) {
-    const want = current.el.offsetTop - box.clientHeight / 2 +
-                 current.el.offsetHeight / 2;
-    box.scrollTop = Math.max(0, want);
-  }
+  follow();
 }
 
 // ------------------------------------------------------------------ veiling
@@ -884,6 +935,13 @@ function connect() {
         if (window.pywebview) pywebview.api.quit();
         return;
       }
+      // The playhead's clock restarts from every push that moves it; a push
+      // that repeats the same position (a paused player, a state change with
+      // no playback in it) must not, or the estimate between pushes would
+      // count from a moment the song was not at.
+      const np = msg && msg.nowPlaying;
+      const at = (np && np.position) || 0;
+      if (at !== posBase) { posBase = at; posAt = Date.now(); }
       state = msg;
       render();
     } catch (e) {}
@@ -1023,6 +1081,9 @@ el("lyricsbtn").addEventListener("click", (ev) => {
 
 render();
 connect();
+// 10Hz: fast enough that a line lights on the beat, and it does no DOM work
+// at all until the line it would light actually changes.
+setInterval(tick, 100);
 </script>
 </body>
 </html>

@@ -30,6 +30,7 @@
   let lastState = null;
   let lastItemId = null;
   let lastPositionSent = 0;
+  let itemProgress = 0;         // furthest the playhead got on the current item
   let suppressEndedUntil = 0;   // see play(): queue swaps echo a false end
 
   const send = (msg) => window.postMessage({ __musicdj: OUT, payload: msg }, "*");
@@ -134,6 +135,12 @@
     // real ends this soon after a deliberate play, so gag the report.
     suppressEndedUntil = Date.now() + 5000;
     await mk.setQueue({ song: String(catalogId) });
+    // setQueue is a network call and can sit there for seconds, and the
+    // teardown's false end lands once it returns -- so the window has to be
+    // measured from here, not from before the wait. Measured from before it,
+    // a slow swap outlived the gag and the daemon burned the new song five
+    // seconds in. The daemon checks the playhead too; this is the cheap half.
+    suppressEndedUntil = Date.now() + 8000;
     kick();
     await sleep(3000);
 
@@ -346,7 +353,15 @@
 
     if (state === S_ENDED || state === S_COMPLETED) {
       if (Date.now() < suppressEndedUntil) return;   // queue-swap echo
-      emit("trackEnded", { catalogId: lastItemId });
+      const np = nowPlaying();
+      // The daemon cannot see the playhead, and it is the only thing that
+      // separates a song finishing from the old queue's teardown reported
+      // under the new song's name. Send the furthest it reached.
+      emit("trackEnded", {
+        catalogId: lastItemId,
+        position: Math.max(itemProgress, np.position || 0),
+        duration: np.duration || null,
+      });
       return;
     }
     // A transition into "playing" means autoplay is no longer blocked.
@@ -355,11 +370,21 @@
 
   function onItemChange() {
     const np = nowPlaying();
+    // A different song starts the watermark over. The item merely clearing --
+    // which is what the end of a one-song queue looks like -- must not, or a
+    // real end would report a playhead that never moved and be dismissed as
+    // an echo, and the music would stop for good.
+    if (np.catalogId && np.catalogId !== lastItemId) itemProgress = 0;
     lastItemId = np.catalogId;
     emit("playback", np);
   }
 
   function onTimeChange() {
+    // Watermark every tick, not just the ones we forward: a genuine end has
+    // to arrive with the playhead near the duration for the daemon to trust
+    // it, and the throttle below would hide the last second of the song.
+    const at = mk ? Math.round((mk.currentPlaybackTime || 0) * 1000) : 0;
+    if (at > itemProgress) itemProgress = at;
     // Position ticks fire several times a second; one update per second is
     // plenty for a progress readout and keeps the socket quiet.
     if (Date.now() - lastPositionSent < 1000) return;

@@ -72,6 +72,32 @@ def make_queue(tracks, mood, lane, source, now):
     }
 
 
+ECHO_POSITION_MS = 60000      # nothing real ends this soon after it started
+ECHO_FRACTION = 0.5           # ...unless the item is genuinely that short
+
+
+def ended_too_early(evt):
+    """Is this "ended" the queue swap echoing rather than a song finishing?
+
+    Swapping the player's queue tears the old one down, and the player reports
+    that teardown as an end -- naming the song that just started, because by
+    then that is what it considers current. Taken at face value it burns a
+    track seconds in.
+
+    How far the playhead actually got settles it. An event that does not say
+    is taken at its word: only the page knows, and older pages do not send it.
+    """
+    position = (evt or {}).get("position")
+    duration = (evt or {}).get("duration")
+    if position is None:
+        return False
+    if position >= ECHO_POSITION_MS:
+        return False
+    # A 30s preview clip really does end at 30s, so a small position is only
+    # suspicious when the track had much further to go.
+    return not duration or position < duration * ECHO_FRACTION
+
+
 def advance(queue):
     """Pop the head. Returns (next_track_or_None, new_queue)."""
     tracks = queue_tracks(queue)
