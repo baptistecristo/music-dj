@@ -5,6 +5,12 @@
 // the alarm below guarantees traffic even when the daemon is quiet. If the
 // worker dies anyway, the alarm wakes it and the socket is rebuilt.
 
+// Firefox puts the promise-returning API on `browser` and keeps `chrome` as a
+// callback-style alias; Chrome has only `chrome`, and in MV3 it returns
+// promises. Picking `browser` where it exists gives one promise-shaped API on
+// both, which is what every await below assumes.
+const api = typeof browser !== "undefined" ? browser : chrome;
+
 const DAEMON_URL = "ws://127.0.0.1:8787/bridge";
 const KEEPALIVE_MS = 15000;
 const LAUNCHER = "com.music_dj.launcher";
@@ -25,15 +31,15 @@ const log = (...a) => console.log("[music-dj]", ...a);
 function adopt(id) {
   tabId = id;
   try {
-    chrome.storage.session.set({ tabId: id }).catch(() => {});
+    api.storage.session.set({ tabId: id }).catch(() => {});
   } catch (_) {}
 }
 
 const restored = (async () => {
   try {
-    const saved = (await chrome.storage.session.get("tabId")).tabId;
+    const saved = (await api.storage.session.get("tabId")).tabId;
     if (saved == null || tabId != null) return;
-    await chrome.tabs.get(saved);    // throws if it closed while we slept
+    await api.tabs.get(saved);    // throws if it closed while we slept
     tabId = saved;
   } catch (_) {}
 })();
@@ -45,34 +51,50 @@ async function findTab() {
   await restored;
   if (tabId != null) {
     try {
-      await chrome.tabs.get(tabId);
+      await api.tabs.get(tabId);
       return tabId;
     } catch (_) {
       adopt(null);
     }
   }
-  const tabs = await chrome.tabs.query({ url: "https://music.apple.com/*" });
+  const tabs = await api.tabs.query({ url: "https://music.apple.com/*" });
   adopt(tabs.length ? tabs[0].id : null);
   return tabId;
 }
 
-// No DJ tab anywhere? Open one ourselves -- pinned and in the background, so
-// starting the daemon is the only launch step there is. Resolves when the
-// page has loaded (or after a generous timeout, for slow networks).
-async function openTab() {
-  const tab = await chrome.tabs.create({
-    url: "https://music.apple.com/", pinned: true, active: false });
+// Bring the DJ tab to the front. Worth doing on an explicit click: the
+// browser will not let audio start until someone has interacted with that
+// tab at least once, and a pinned background tab is a favicon at the far
+// left of the strip that nobody notices, let alone clicks.
+async function showTab(id) {
+  try {
+    const tab = await api.tabs.update(id, { active: true });
+    if (tab && tab.windowId != null) {
+      await api.windows.update(tab.windowId, { focused: true });
+    }
+  } catch (e) {
+    log("could not bring the DJ tab forward:", e.message || e);
+  }
+}
+
+// No DJ tab anywhere? Open one ourselves -- pinned, so starting the daemon is
+// the only launch step there is. Resolves when the page has loaded (or after
+// a generous timeout, for slow networks). `show` is set when a click asked
+// for the tab, and left off when the daemon merely needs somewhere to play.
+async function openTab(show) {
+  const tab = await api.tabs.create({
+    url: "https://music.apple.com/", pinned: true, active: !!show });
   adopt(tab.id);
   await new Promise((resolve) => {
     const done = (id, info) => {
       if (id === tab.id && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(done);
+        api.tabs.onUpdated.removeListener(done);
         resolve();
       }
     };
-    chrome.tabs.onUpdated.addListener(done);
+    api.tabs.onUpdated.addListener(done);
     setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(done);
+      api.tabs.onUpdated.removeListener(done);
       resolve();
     }, 20000);
   });
@@ -85,9 +107,9 @@ async function openTab() {
 // bridge in it, and every command fails with "Receiving end does not exist".
 // Injecting on demand fixes that without asking the user to reload anything.
 async function inject(id) {
-  await chrome.scripting.executeScript({
+  await api.scripting.executeScript({
     target: { tabId: id }, files: ["bridge-main.js"], world: "MAIN" });
-  await chrome.scripting.executeScript({
+  await api.scripting.executeScript({
     target: { tabId: id }, files: ["bridge-iso.js"], world: "ISOLATED" });
 }
 
@@ -97,15 +119,17 @@ async function inject(id) {
 // flight instead, so only one openTab can ever run.
 let acquiring = null;
 
-function acquireTab() {
+function acquireTab(show) {
   if (acquiring) return acquiring;
   acquiring = (async () => {
     let id = await findTab();
     if (id == null) {
-      id = await openTab();
+      id = await openTab(show);
       await inject(id);
       // The fresh page announces itself and MusicKit takes a moment to exist.
       await new Promise((r) => setTimeout(r, 500));
+    } else if (show) {
+      await showTab(id);       // already open, somewhere behind everything
     }
     return id;
   })().finally(() => { acquiring = null; });
@@ -115,7 +139,7 @@ function acquireTab() {
 async function toPage(payload) {
   await acquireTab();
   try {
-    await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
+    await api.tabs.sendMessage(tabId, { kind: "toPage", payload });
     return;
   } catch (e) {
     log("no listener in tab", tabId, "- re-injecting");
@@ -134,7 +158,7 @@ async function toPage(payload) {
   // The page-world script polls for MusicKit, so give it a moment to wire up.
   await new Promise((r) => setTimeout(r, 500));
   try {
-    await chrome.tabs.sendMessage(tabId, { kind: "toPage", payload });
+    await api.tabs.sendMessage(tabId, { kind: "toPage", payload });
   } catch (e) {
     throw new Error("the DJ tab is not responding — try reloading it");
   }
@@ -156,8 +180,8 @@ function connect() {
   const sock = ws;
 
   ws.onopen = () => {
-    chrome.action.setBadgeBackgroundColor({ color: "#2e7d32" });
-    chrome.action.setBadgeText({ text: "ON" });
+    api.action.setBadgeBackgroundColor({ color: "#2e7d32" });
+    api.action.setBadgeText({ text: "ON" });
     backoff = 1000;
     log("connected to daemon");
     findTab();   // re-validate (or adopt) the DJ tab ahead of the first command
@@ -180,7 +204,7 @@ function connect() {
 
   ws.onclose = () => {
     if (ws !== sock) return;          // already superseded; leave the live one alone
-    chrome.action.setBadgeText({ text: "" });
+    api.action.setBadgeText({ text: "" });
     clearInterval(keepaliveTimer);
     keepaliveTimer = null;
     schedule();
@@ -204,7 +228,7 @@ function send(obj) {
 
 // ------------------------------------------------------------------- routing
 
-chrome.runtime.onMessage.addListener((msg, sender) => {
+api.runtime.onMessage.addListener((msg, sender) => {
   if (!msg) return false;
   // Whichever tab we adopted first stays the one we drive. Reassigning on
   // every message meant a second signed-in tab could take over mid-command,
@@ -227,7 +251,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   return false;
 });
 
-chrome.tabs.onRemoved.addListener((id) => {
+api.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
     adopt(null);
     send({ evt: "tabGone" });
@@ -238,38 +262,44 @@ chrome.tabs.onRemoved.addListener((id) => {
 
 // The toolbar icon is the DJ's switch: connected means clicking stops it,
 // disconnected means clicking asks the launcher (a native messaging host,
-// registered by host/register.ps1) to start the daemon and overlay. The
+// registered by host/register.py) to start the daemon and overlay. The
 // DJ tab is opened here too, up front, so activation is one click total.
-chrome.action.onClicked.addListener(async () => {
+async function startTheDaemon() {
+  // Promise form rather than a callback with runtime.lastError: Firefox's
+  // `browser` API has no lastError at all, and a failure there arrives as a
+  // rejection. Chrome MV3 answers the same shape.
+  try {
+    const reply = await api.runtime.sendNativeMessage(LAUNCHER, { cmd: "start" });
+    log("launcher:", JSON.stringify(reply));
+    // The reconnect loop may be sitting out a 30s backoff; the daemon will
+    // be up in a moment, so try again now.
+    backoff = 1000;
+    connect();
+  } catch (e) {
+    log("launcher failed:", (e && e.message) || e,
+        "-- run app/host/register.py, then reload the extension");
+    api.action.setBadgeBackgroundColor({ color: "#c62828" });
+    api.action.setBadgeText({ text: "ERR" });
+    setTimeout(() => api.action.setBadgeText({ text: "" }), 4000);
+  }
+}
+
+api.action.onClicked.addListener(async () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     send({ evt: "shutdown" });
     return;
   }
-  chrome.runtime.sendNativeMessage(LAUNCHER, { cmd: "start" }, (reply) => {
-    if (chrome.runtime.lastError) {
-      log("launcher failed:", chrome.runtime.lastError.message,
-          "-- run app/host/register.ps1, then reload the extension");
-      chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
-      chrome.action.setBadgeText({ text: "ERR" });
-      setTimeout(() => chrome.action.setBadgeText({ text: "" }), 4000);
-      return;
-    }
-    log("launcher:", JSON.stringify(reply));
-    // The reconnect loop may be sitting out a 30s backoff; the daemon
-    // will be up in a moment, so try again now.
-    backoff = 1000;
-    connect();
-  });
+  startTheDaemon();            // not awaited: the tab can open alongside it
   try {
-    await acquireTab();
+    await acquireTab(true);    // open it if missing, and put it in front
   } catch (e) {
     log("could not open the DJ tab:", e);
   }
 });
 
-chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener(() => connect());
-chrome.runtime.onStartup.addListener(() => connect());
-chrome.runtime.onInstalled.addListener(() => connect());
+api.alarms.create("keepalive", { periodInMinutes: 0.5 });
+api.alarms.onAlarm.addListener(() => connect());
+api.runtime.onStartup.addListener(() => connect());
+api.runtime.onInstalled.addListener(() => connect());
 
 connect();

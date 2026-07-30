@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "music-dj-bridge",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Bridges the local music-dj daemon to the Apple Music web player.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx5e0qhyEdHG60Ytiw0h9FrR8PE6Vme9LAPMS69MtkChRdl1f/KMBUhzKP+Kb8310Svitxu+Nz7GNESFx3+Tyxh03yJP34aV3b3uAcfug9aHKgCTQVHaSnp8kzbiRo9bzWdmgUPRVbqTmxwHVvKHRUcy6WIJKmH1Ho0QnJ885TFhYeq8ssUePlF5t7zgHDU6tKi6+IZcBqf051BvfnZ2GBvOOj7cLPcJvkP4ozg7cWUyRIO4CjpQWJjzwRhDpPFlmmc8u9vKGbZz6b8k96/nPwaZ5ncJsZuOY5cJybGWaq6ibDXfFz6IBWRhsERyn5j0gIKRDqScSc6Cb90ZzWPESHQIDAQAB",
   "permissions": ["alarms", "storage", "scripting", "nativeMessaging"],
@@ -23,8 +23,15 @@
   "host_permissions": [
     "https://music.apple.com/*"
   ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "music-dj@baptistecristo.github.io",
+      "strict_min_version": "128.0"
+    }
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "content_scripts": [
     {
