@@ -23,6 +23,7 @@ PLAY_ATTEMPTS = 3       # dead tracks to walk past before giving up on a cycle
 # Press "previous" further in than this and it restarts the song instead of
 # leaving it. Under it you are still at the top, so you meant the one before.
 RESTART_BEFORE_MS = 3000
+DUCK_TIMEOUT = 5        # a volume change that takes longer has bigger problems
 
 
 class DJ:
@@ -58,6 +59,8 @@ class DJ:
         self.previews_only = False
         self.autoplay_blocked = False
         self.playing = False
+        # The level to put back after ducking, or None when we have not ducked.
+        self._volume_before = None
         self.listeners = []          # UI push callbacks
         self._tasks = set()          # strong refs to fire-and-forget tasks
         # catalogId of a track whose play command is still awaiting its reply.
@@ -495,6 +498,32 @@ class DJ:
                           tracks=[track] + library.queue_tracks(self.queue))
         store.write_json(store.QUEUE, self.queue)
         await self.play_next()
+
+    # --------------------------------------------------------------- volume
+
+    async def duck(self, level):
+        """Turn the music down while they talk, remembering where it was."""
+        reply = await self.tx.call({"cmd": "volume", "level": level},
+                                   timeout=DUCK_TIMEOUT)
+        if not isinstance(reply, dict) or reply.get("error"):
+            # No tab, or an old page script that does not know the command.
+            # Talking over the music is worse than silence but it still works.
+            return
+        previous = reply.get("previous")
+        # Only the first duck of a press records anything. Record it twice and
+        # the second one saves 0.15, so the music comes back at a whisper and
+        # stays there for the rest of the session.
+        if self._volume_before is None and isinstance(previous, (int, float)):
+            self._volume_before = float(previous)
+
+    async def unduck(self):
+        """Put the volume back where it was, if we moved it."""
+        level = self._volume_before
+        self._volume_before = None
+        if level is None:
+            return
+        await self.tx.call({"cmd": "volume", "level": level},
+                           timeout=DUCK_TIMEOUT)
 
     # --------------------------------------------------------------- events
 

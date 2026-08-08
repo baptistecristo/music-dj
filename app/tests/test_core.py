@@ -42,6 +42,8 @@ class FakeTransport:
         self.ttml = None
         self.additions = []
         self.counter = 0
+        self.volume = 1.0
+        self.fail_volume = False
 
     async def call(self, cmd, timeout=None):
         self.calls.append(cmd)
@@ -76,6 +78,13 @@ class FakeTransport:
             return {"ttml": self.ttml}
         if kind == "recentlyAdded":
             return {"items": list(self.additions)}
+        if kind == "volume":
+            if self.fail_volume:
+                return {"error": "no tab"}
+            before = self.volume
+            if cmd.get("level") is not None:
+                self.volume = float(cmd["level"])
+            return {"ok": True, "previous": before, "volume": self.volume}
         return {"ok": True}
 
     def sent(self, kind):
@@ -1404,3 +1413,44 @@ async def test_shutdown_when_not_playing_skips_pause():
 
     assert {"cmd": "pause"} not in tx.calls
     assert dj.shutdown_event.is_set()
+
+
+# -------------------------------------------------------------------- volume
+
+
+@pytest.mark.asyncio
+async def test_ducking_remembers_the_level_to_restore():
+    dj = make_dj()
+    dj.tx.volume = 0.8
+    await dj.duck(0.15)
+    assert dj.tx.volume == pytest.approx(0.15)
+    await dj.unduck()
+    assert dj.tx.volume == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_a_second_duck_does_not_overwrite_what_to_restore():
+    # Two ducks without a restore between them: the second must not record
+    # 0.15 as "before", or the music comes back at a whisper and stays there.
+    dj = make_dj()
+    dj.tx.volume = 0.8
+    await dj.duck(0.15)
+    await dj.duck(0.15)
+    await dj.unduck()
+    assert dj.tx.volume == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_unducking_without_a_duck_sends_nothing():
+    dj = make_dj()
+    await dj.unduck()
+    assert not [c for c in dj.tx.calls if c.get("cmd") == "volume"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_duck_records_no_level():
+    # The tab is gone. Restoring to a level we never read would be a guess.
+    dj = make_dj()
+    dj.tx.fail_volume = True
+    await dj.duck(0.15)
+    assert dj._volume_before is None

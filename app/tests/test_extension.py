@@ -98,3 +98,18 @@ def test_the_icons_are_declared_at_every_size_both_engines_ask_for():
         assert set(block) == {"16", "32", "48", "128"}
         for rel in block.values():
             assert os.path.exists(os.path.join(EXTENSION, rel)), rel
+
+
+def test_the_page_can_change_the_volume_and_reports_the_old_one():
+    # The daemon ducks while you speak and has to put the level back. It can
+    # only do that if the page hands back what the level was.
+    body = code("bridge-main.js")
+    assert 'case "volume":' in body
+    assert re.search(r"previous:\s*\w+", body)
+
+
+def test_the_volume_is_clamped_to_what_musickit_accepts():
+    # MusicKit takes 0..1. A level outside it throws inside the page, which
+    # surfaces as a dead command rather than as a range error.
+    body = code("bridge-main.js")
+    assert "Math.min(1" in body and "Math.max(0" in body
