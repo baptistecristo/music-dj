@@ -1454,3 +1454,120 @@ async def test_a_failed_duck_records_no_level():
     dj.tx.fail_volume = True
     await dj.duck(0.15)
     assert dj._volume_before is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_reaches_the_picker():
+    dj = make_dj()
+    seen = []
+    dj.picks_for = lambda mood, lane: seen.append(dj.steer_text()) or [
+        {"title": "T", "artist": "A"}]
+    await dj.on_steer("un truc plus calme")
+    assert seen and seen[0] == "un truc plus calme"
+
+
+@pytest.mark.asyncio
+async def test_a_steer_throws_away_the_queue_picked_before_it():
+    # Those tracks were chosen before they said anything. None of them knows
+    # about the request, so playing them out first ignores it for ten minutes.
+    dj = make_dj()
+    dj.queue = library.make_queue(
+        [{"catalogId": "old1", "title": "Old", "artist": "A"}],
+        "coding", "focus", "profile", 0)
+    await dj.on_steer("plus calme")
+    assert "old1" not in [t["catalogId"] for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_a_steer_moves_off_the_current_track():
+    dj = make_dj()
+    await dj.play_next()
+    first = dj.current["catalogId"]
+    await dj.on_steer("plus calme")
+    assert dj.current["catalogId"] != first
+
+
+@pytest.mark.asyncio
+async def test_a_steer_is_not_a_skip():
+    # Saying "something calmer" is a verdict on the register, not on whatever
+    # happened to be playing when they said it. Recording a skip here teaches
+    # the DJ they dislike an innocent song, and two of those shun it for good.
+    dj = make_dj()
+    await dj.play_next()
+    before = dict(dj.signals)
+    await dj.on_steer("plus calme")
+    assert dj.signals == before
+
+
+@pytest.mark.asyncio
+async def test_a_steer_shows_in_the_ui_before_the_picking():
+    # Picking takes seventeen seconds. The chip appearing at once is the only
+    # thing telling them the key worked.
+    dj = make_dj()
+    states = []
+    dj.subscribe(states.append)
+    dj.picks_for = lambda mood, lane: [{"title": "T", "artist": "A"}]
+    await dj.on_steer("plus calme")
+    assert states[0]["steer"] == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_a_steer_expires():
+    # make_dj pins the clock at 1000.0, so this one builds its own DJ to get
+    # a clock it can move.
+    clock = [1000.0]
+    dj = core.DJ(FakeTransport(), now=lambda: clock[0], rng=random.Random(0))
+    await dj.on_steer("plus calme")
+    clock[0] += core.STEER_TTL - 1
+    assert dj.steer_text() == "plus calme"
+    clock[0] += 2
+    assert dj.steer_text() is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_survives_a_mood_change():
+    # Asked for calmer while debugging, then started building: still calmer.
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.set_mood("building")
+    assert dj.steer_text() == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_speaking_again_replaces_the_steer():
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.on_steer("plus rapide")
+    assert dj.steer_text() == "plus rapide"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_steer_changes_nothing():
+    dj = make_dj()
+    await dj.play_next()
+    first = dj.current["catalogId"]
+    await dj.on_steer("   ")
+    assert dj.steer_text() is None
+    assert dj.current["catalogId"] == first
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_steer_empties_it():
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.on_action({"action": "clearSteer"})
+    assert dj.steer_text() is None
+
+
+@pytest.mark.asyncio
+async def test_a_typed_steer_arrives_through_the_ui():
+    dj = make_dj()
+    await dj.on_action({"action": "steer", "text": "plus calme"})
+    assert dj.steer_text() == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_listening_shows_in_the_ui():
+    dj = make_dj()
+    dj.set_listening(True)
+    assert dj.ui_state()["listening"] is True

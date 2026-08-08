@@ -31,7 +31,7 @@ async def run(args):
         # Claude picks the batch; the profile stays underneath as the fallback
         # whenever the CLI is missing, slow, or unhelpful.
         dj.picks_for = lambda mood, lane: advisor.picks_for(
-            mood, lane, seeds=dj.seeds, rng=dj.rng)
+            mood, lane, seeds=dj.seeds, rng=dj.rng, steer=dj.steer_text())
     transport.on_event = dj.on_event
 
     srv = server.Server(dj, transport, port=args.port)

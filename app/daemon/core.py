@@ -24,6 +24,10 @@ PLAY_ATTEMPTS = 3       # dead tracks to walk past before giving up on a cycle
 # leaving it. Under it you are still at the top, so you meant the one before.
 RESTART_BEFORE_MS = 3000
 DUCK_TIMEOUT = 5        # a volume change that takes longer has bigger problems
+# How long a spoken request keeps shaping the picks. Long enough to cover the
+# stretch of work that prompted it, short enough that this morning's "something
+# calmer" is not still deciding what plays this afternoon.
+STEER_TTL = 20 * 60
 
 
 class DJ:
@@ -61,6 +65,8 @@ class DJ:
         self.playing = False
         # The level to put back after ducking, or None when we have not ducked.
         self._volume_before = None
+        self.steer = None            # {"text", "at"}: the last thing they said
+        self.listening = False       # the key is down and the mic is open
         self.listeners = []          # UI push callbacks
         self._tasks = set()          # strong refs to fire-and-forget tasks
         # catalogId of a track whose play command is still awaiting its reply.
@@ -154,6 +160,9 @@ class DJ:
             "preparing": self.preparing,
             "setup": self.setup,
             "lyrics": self.lyrics,
+            # What they last asked for out loud, and whether the mic is open.
+            "steer": self.steer_text(),
+            "listening": self.listening,
         }
 
     def push(self):
@@ -525,6 +534,40 @@ class DJ:
         await self.tx.call({"cmd": "volume", "level": level},
                            timeout=DUCK_TIMEOUT)
 
+    def steer_text(self):
+        """What they last asked for out loud, or None once it has gone stale."""
+        if not self.steer:
+            return None
+        if self.now() - self.steer["at"] > STEER_TTL:
+            self.steer = None
+            return None
+        return self.steer["text"]
+
+    def set_listening(self, flag):
+        self.listening = bool(flag)
+        self.push()
+
+    async def on_steer(self, text):
+        """They said something. Act on it now, not at the next refill."""
+        text = (text or "").strip()
+        if not text:
+            # Whisper heard a cough. Advancing the track on that would be the
+            # most irritating bug this feature could have.
+            return
+        self.steer = {"text": text, "at": self.now()}
+        log.info("steer: %s", text)
+        # The chip lands before the seventeen seconds of picking, so holding
+        # the key has a visible answer straight away.
+        self.push()
+        # Everything queued behind this was chosen before they spoke.
+        self.queue = library.make_queue([], self.mood, self.lane, "profile",
+                                        self.now())
+        await self.refill()
+        # play_next rather than on_action's skip branch, which records a
+        # signal against the outgoing track. They passed judgement on the
+        # register, not on the song that happened to be playing.
+        await self.play_next()
+
     # --------------------------------------------------------------- events
 
     async def shutdown(self):
@@ -751,6 +794,13 @@ class DJ:
         elif action == "dismissSetup":
             self.setup = None
             self.notice = None
+            self.push()
+
+        elif action == "steer":
+            await self.on_steer(msg.get("text"))
+
+        elif action == "clearSteer":
+            self.steer = None
             self.push()
 
     async def rate(self, stars):
