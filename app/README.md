@@ -252,6 +252,17 @@ waits on it -- the queue refills mid-track).
 
 - Content scripts do not reach a tab that was already open when the extension
   loaded. The worker injects on demand instead.
+- On an ARM64 Windows machine running x64 Python, `sounddevice` installs and
+  then refuses to load: it asks PortAudio for `libportaudioarm64.dll`, which
+  the x64 wheel it just installed does not ship. `platform.machine()` reports
+  the native ARM64 even from an emulated process, so the check picks the wrong
+  name. The x64 DLL sitting beside it is the right one for an x64 process --
+  copy it to the name being looked for, in the `_sounddevice_data\portaudio-binaries`
+  folder of your site-packages:
+
+```powershell
+Copy-Item libportaudio64bit.dll libportaudioarm64.dll
+```
 - Chrome and Edge refuse audio until the tab has had a real click, and Edge's
   "Limit" autoplay default re-blocks it.
 - Apple Music registers `beforeunload`, so reloading the DJ tab throws up a

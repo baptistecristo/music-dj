@@ -124,8 +124,15 @@ def start(dj, loop, config):
     if cfg.get("enabled") is False:
         return None
     if not listen.available():
-        log.info("voice off. To talk to the DJ: pip install -r "
-                 "app/requirements-voice.txt, then python -m daemon.listen --warm")
+        # Say which package and why. This line used to recommend pip install
+        # whatever the cause, so a package that was installed and would not
+        # load sent you back to install it again.
+        reason = listen.unavailable_reason() or "the voice packages are unavailable"
+        log.info("voice off: %s", reason)
+        if "not installed" in reason:
+            log.info("to talk to the DJ: pip install -r "
+                     "app/requirements-voice.txt, then "
+                     "python -m daemon.listen --warm")
         return None
 
     transcriber = listen.Transcriber(

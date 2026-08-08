@@ -24,26 +24,60 @@ DEFAULT_LANGUAGE = "fr"
 DEFAULT_NO_SPEECH = 0.6
 
 
+# Why the last import attempt failed, keyed by package. Kept because the two
+# ways to fail want opposite advice, and the module used to give the same
+# advice to both.
+_IMPORT_ERRORS = {}
+
+
 def _import_audio():
     """sounddevice and numpy, or None. Separated so tests can remove them."""
     try:
         import numpy
         import sounddevice
+        _IMPORT_ERRORS.pop("sounddevice", None)
         return sounddevice, numpy
-    except Exception:
+    except Exception as exc:
+        _IMPORT_ERRORS["sounddevice"] = exc
         return None
 
 
 def _import_whisper():
     try:
         from faster_whisper import WhisperModel
+        _IMPORT_ERRORS.pop("faster-whisper", None)
         return WhisperModel
-    except Exception:
+    except Exception as exc:
+        _IMPORT_ERRORS["faster-whisper"] = exc
         return None
 
 
 def available():
     return bool(_import_audio()) and bool(_import_whisper())
+
+
+def unavailable_reason():
+    """Why voice is off, in one line, or None when it is on.
+
+    available() answers yes or no; this answers why, because a package that
+    is missing and a package that is installed and will not load want
+    opposite advice. Being told to install what you have already installed
+    sends you round the same loop -- which is what happens on an ARM64
+    Windows machine, where sounddevice asks PortAudio for a DLL its own x64
+    wheel never ships.
+    """
+    reasons = []
+    for name, load in (("sounddevice", _import_audio),
+                       ("faster-whisper", _import_whisper)):
+        if load() is not None:
+            continue
+        exc = _IMPORT_ERRORS.get(name)
+        if exc is None or isinstance(exc, ImportError):
+            reasons.append("%s is not installed" % name)
+        else:
+            reasons.append("%s is installed but will not load (%s: %s)"
+                           % (name, type(exc).__name__, exc))
+    return "; ".join(reasons) or None
 
 
 def usable(text, no_speech_prob, threshold=DEFAULT_NO_SPEECH):
@@ -177,9 +211,11 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    if not available():
-        print("Install the voice extras first:")
-        print("    python -m pip install -r app/requirements-voice.txt")
+    reason = unavailable_reason()
+    if reason:
+        print("Voice is off: %s" % reason)
+        if "not installed" in reason:
+            print("    python -m pip install -r app/requirements-voice.txt")
         raise SystemExit(1)
     print("Loading %s. The first run downloads about 500MB." % args.model)
     if Transcriber(model=args.model).warm() is None:

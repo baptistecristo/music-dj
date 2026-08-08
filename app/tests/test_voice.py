@@ -367,6 +367,35 @@ def test_voice_stays_off_when_it_is_switched_off(monkeypatch):
     assert voice.start(FakeDJ(), None, {"voice": {"enabled": False}}) is None
 
 
+def test_a_package_that_is_not_installed_says_so(monkeypatch):
+    monkeypatch.setattr(listen, "_import_audio", lambda: None)
+    monkeypatch.setattr(listen, "_import_whisper", lambda: None)
+    monkeypatch.setitem(listen._IMPORT_ERRORS, "sounddevice",
+                        ModuleNotFoundError("No module named 'sounddevice'"))
+    reason = listen.unavailable_reason()
+    assert "sounddevice is not installed" in reason
+
+
+def test_a_package_that_will_not_load_does_not_say_install_it(monkeypatch):
+    # The one that cost an evening: on ARM64 Windows, sounddevice installs
+    # and then asks PortAudio for a DLL its own x64 wheel never ships. Being
+    # told to install what you just installed sends you round the same loop.
+    monkeypatch.setattr(listen, "_import_audio", lambda: None)
+    monkeypatch.setattr(listen, "_import_whisper", lambda: object())
+    monkeypatch.setitem(listen._IMPORT_ERRORS, "sounddevice",
+                        OSError("cannot load library 'libportaudioarm64.dll'"))
+    reason = listen.unavailable_reason()
+    assert "not installed" not in reason
+    assert "will not load" in reason
+    assert "libportaudioarm64.dll" in reason
+
+
+def test_nothing_is_wrong_when_both_packages_import(monkeypatch):
+    monkeypatch.setattr(listen, "_import_audio", lambda: object())
+    monkeypatch.setattr(listen, "_import_whisper", lambda: object())
+    assert listen.unavailable_reason() is None
+
+
 def test_nothing_reachable_from_the_ui_can_open_the_microphone():
     # server.py admits in its own comment that any page served from this
     # machine can reach /ui. Text arriving from one is annoying. A microphone
