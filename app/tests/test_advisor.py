@@ -302,6 +302,26 @@ def test_the_artist_is_still_found_when_they_do_name_them():
                                      {"focus": ["Air"]}) == ["Air"]
 
 
+def test_a_name_that_starts_or_ends_in_punctuation_is_still_found():
+    # \b needs a word character on both sides of the match, so anchoring both
+    # ends of every name lost the ones punctuation begins or ends. These two
+    # worked under the old substring match and have to keep working.
+    assert advisor.seed_artists_from("mets du !!! là",
+                                     {"focus": ["!!!"]}) == ["!!!"]
+    assert advisor.seed_artists_from("du Sunn O))) plutôt",
+                                     {"focus": ["Sunn O)))"]}) == ["Sunn O)))"]
+
+
+def test_names_with_punctuation_inside_them_are_still_found():
+    seeds = {"focus": ["AC/DC", "Earth, Wind & Fire", "M83", "Sébastien Tellier"]}
+    assert advisor.seed_artists_from("un peu d'AC/DC", seeds) == ["AC/DC"]
+    assert advisor.seed_artists_from("du Earth, Wind & Fire",
+                                     seeds) == ["Earth, Wind & Fire"]
+    assert advisor.seed_artists_from("remets du M83", seeds) == ["M83"]
+    assert advisor.seed_artists_from("du Sébastien Tellier",
+                                     seeds) == ["Sébastien Tellier"]
+
+
 def test_the_fallback_plays_the_artist_they_named_when_claude_is_down():
     # Claude unavailable, and they asked for someone by name. The profile
     # picker cannot read French, but it can recognise a name it already has.

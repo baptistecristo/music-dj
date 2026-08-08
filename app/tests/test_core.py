@@ -1641,6 +1641,49 @@ async def test_the_second_of_two_steers_wins():
 
 
 @pytest.mark.asyncio
+async def test_a_steer_expiring_mid_refill_keeps_the_batch():
+    # The guard against a newer steer must not fire on an older one going
+    # away. Nobody asked for different music when the twenty minutes ran out,
+    # and dropping the batch leaves an empty queue with no refill behind it --
+    # silence until start_when_ready's poll notices, twenty seconds later.
+    # Every other test here pins the clock at 1000.0, so this one builds its
+    # own DJ to get a clock that can cross the expiry mid-pick.
+    clock = [1000.0]
+    dj = core.DJ(FakeTransport(), now=lambda: clock[0], rng=random.Random(0))
+
+    def slow_picks(mood, lane):
+        clock[0] += core.STEER_TTL + 1      # they said it a long time ago now
+        return [{"title": "T", "artist": "A", "why": "steered"}]
+
+    dj.picks_for = slow_picks
+    dj.steer = {"text": "plus calme", "at": clock[0]}
+
+    await dj.refill()
+    assert library.queue_tracks(dj.queue), "the batch went in the bin on expiry"
+    await dj.play_next()
+    assert dj.current, "nothing playing; the music stopped"
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_steer_mid_refill_keeps_the_batch():
+    # Same shape, reached by clicking the chip instead of waiting. clearSteer
+    # sets steer to None and does not refill, so dropping this batch leaves
+    # nobody to build the next one.
+    tx = FakeTransport()
+    tx.search_delay = 0.2
+    dj = make_dj(tx)
+    dj.picks_for = lambda mood, lane: [{"title": "T", "artist": "A"}]
+    dj.steer = {"text": "plus calme", "at": dj.now()}
+
+    inflight = asyncio.create_task(dj.refill())
+    await asyncio.sleep(0.05)
+    await dj.on_action({"action": "clearSteer"})
+    await inflight
+
+    assert library.queue_tracks(dj.queue), "clearing the chip emptied the queue"
+
+
+@pytest.mark.asyncio
 async def test_clearing_the_steer_empties_it():
     dj = make_dj()
     await dj.on_steer("plus calme")

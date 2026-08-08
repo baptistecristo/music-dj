@@ -278,12 +278,19 @@ class DJ:
                 log.info("dropping stale refill for %s/%s", mood, lane)
                 return
 
-            if self.steer_text() != said:
+            now_said = self.steer_text()
+            if now_said is not None and now_said != said:
                 # They spoke while this was in flight. on_steer already
                 # emptied the queue, so writing these picks would fill it
                 # with songs chosen before they said anything -- and the
                 # first of them is what play_next reaches for. The newer
                 # steer has its own refill queued behind this lock.
+                #
+                # Only when there IS a newer steer. A steer that expired or
+                # was cleared mid-refill also changes this value, and dropping
+                # the batch then leaves the queue empty with nobody about to
+                # refill it: twenty seconds of silence until start_when_ready
+                # notices. Nobody asked for different music, so keep it.
                 log.info("dropping a refill the steer overtook")
                 return
 

@@ -171,10 +171,23 @@ def seed_artists_from(text, seeds):
     found = []
     for artists in (seeds or {}).values():
         for artist in artists:
-            pattern = r"\b%s\b" % re.escape(artist.lower())
-            if re.search(pattern, said) and artist not in found:
+            if re.search(_boundaried(artist.lower()), said) \
+                    and artist not in found:
                 found.append(artist)
     return found
+
+
+def _boundaried(name):
+    """The name as a pattern that will not match inside a longer word.
+
+    \\b was the obvious way and it is wrong: it is defined against a word
+    character on both sides, so it refuses to match any name that begins or
+    ends with punctuation. "!!!" and "Sunn O)))" stopped being findable at
+    all. Anchor an end only when that end is a word character itself.
+    """
+    left = r"(?<!\w)" if name[:1].isalnum() else ""
+    right = r"(?!\w)" if name[-1:].isalnum() else ""
+    return left + re.escape(name) + right
 
 
 def ask_claude(prompt, timeout=TIMEOUT, runner=None):
