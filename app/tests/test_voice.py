@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import listen  # noqa: E402
+from daemon import hotkey  # noqa: E402
 
 
 def test_silence_is_not_worth_acting_on():
@@ -42,3 +43,33 @@ def test_a_missing_probability_is_taken_at_face_value():
 def test_voice_is_off_when_the_packages_are_absent(monkeypatch):
     monkeypatch.setattr(listen, "_import_audio", lambda: None)
     assert listen.available() is False
+
+
+def test_the_default_key_parses():
+    mods, vk = hotkey.parse("alt+j")
+    assert mods == hotkey.MOD_ALT | hotkey.MOD_NOREPEAT
+    assert vk == ord("J")
+
+
+def test_holding_the_key_is_one_press_not_thirty():
+    # Without MOD_NOREPEAT, Windows re-fires WM_HOTKEY at the keyboard's
+    # repeat rate for as long as you hold it, so one sentence reads as
+    # dozens of presses.
+    mods, _ = hotkey.parse("alt+j")
+    assert mods & hotkey.MOD_NOREPEAT
+
+
+def test_modifiers_combine_in_any_order():
+    assert hotkey.parse("ctrl+shift+j") == hotkey.parse("shift+ctrl+j")
+
+
+def test_a_spec_with_no_key_is_refused():
+    assert hotkey.parse("alt") is None
+    assert hotkey.parse("") is None
+    assert hotkey.parse(None) is None
+
+
+def test_a_spec_with_two_letters_is_refused():
+    # RegisterHotKey takes modifiers plus one key. Two letters need a
+    # low-level hook, and Alt+D would fire before the J arrived.
+    assert hotkey.parse("alt+d+j") is None
