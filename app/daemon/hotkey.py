@@ -30,6 +30,12 @@ _MODS = {"alt": MOD_ALT, "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
 
 _NAMED_KEYS = {"space": 0x20, "pause": 0x13, "scrolllock": 0x91}
 
+# pynput's own name for each of the keys above -- not the same word as the
+# spec above. chr(vk) would give a space or an unprintable control character
+# for these, and the pynput side of the combo would then never match, with
+# no error to say why.
+_NAMED_KEY_NAMES = {0x20: "space", 0x13: "pause", 0x91: "scroll_lock"}
+
 POLL = 0.03               # how often the release is checked, in seconds
 
 
@@ -68,6 +74,14 @@ class _WindowsHotkey(threading.Thread):
 
     WM_HOTKEY = 0x0312
     PM_REMOVE = 0x0001
+    # Virtual-key codes for the modifiers themselves, polled in _held() --
+    # RegisterHotKey's MOD_* flags say what the combo requires, but only
+    # GetAsyncKeyState says whether that particular key is still down.
+    VK_SHIFT = 0x10
+    VK_CONTROL = 0x11
+    VK_MENU = 0x12
+    VK_LWIN = 0x5B
+    VK_RWIN = 0x5C
 
     def __init__(self, mods, vk, on_press, on_release):
         super().__init__(daemon=True, name="music-dj-hotkey")
@@ -112,14 +126,28 @@ class _WindowsHotkey(threading.Thread):
     def _held(self, user32):
         self.on_press()
         try:
-            # The high bit of GetAsyncKeyState is "down now". Releasing either
-            # the letter or the modifier ends the phrase, because letting go
-            # of Alt first is a normal way to stop talking.
+            # The high bit of GetAsyncKeyState is "down now". Releasing the
+            # letter or any modifier the combo actually carries ends the
+            # phrase, because letting go of one of them first is a normal way
+            # to stop talking. Checking only Alt here would leave ctrl+shift+j
+            # -- the combo someone reaches for once Alt+J collides with
+            # another program -- capturing forever after Alt, which was never
+            # part of it.
             while not self._stop.is_set():
                 if not user32.GetAsyncKeyState(self.vk) & 0x8000:
                     break
                 if self.mods & MOD_ALT and \
-                        not user32.GetAsyncKeyState(0x12) & 0x8000:
+                        not user32.GetAsyncKeyState(self.VK_MENU) & 0x8000:
+                    break
+                if self.mods & MOD_CONTROL and \
+                        not user32.GetAsyncKeyState(self.VK_CONTROL) & 0x8000:
+                    break
+                if self.mods & MOD_SHIFT and \
+                        not user32.GetAsyncKeyState(self.VK_SHIFT) & 0x8000:
+                    break
+                if self.mods & MOD_WIN and \
+                        not (user32.GetAsyncKeyState(self.VK_LWIN) & 0x8000 or
+                             user32.GetAsyncKeyState(self.VK_RWIN) & 0x8000):
                     break
                 time.sleep(POLL)
         finally:
@@ -160,13 +188,18 @@ class _PynputHotkey:
         return self
 
     def _wanted(self):
-        keys = {chr(self.vk).lower()}
+        # A letter matches chr(vk); a named key does not -- see
+        # _NAMED_KEY_NAMES for why chr(vk) alone would never match pynput's
+        # own name for it.
+        keys = {_NAMED_KEY_NAMES.get(self.vk, chr(self.vk).lower())}
         if self.mods & MOD_ALT:
             keys |= {"alt"}
         if self.mods & MOD_CONTROL:
             keys |= {"ctrl"}
         if self.mods & MOD_SHIFT:
             keys |= {"shift"}
+        if self.mods & MOD_WIN:
+            keys |= {"cmd"}
         return keys
 
     def _name(self, key):
@@ -174,9 +207,12 @@ class _PynputHotkey:
         if char:
             return char.lower()
         name = getattr(key, "name", "") or ""
-        for stem in ("alt", "ctrl", "shift", "cmd"):
+        # "win"/"super" in a spec and "cmd" from pynput must land on the same
+        # token, or a combo parsed from "win+j" needs no modifier at all on
+        # macOS and Linux -- plain j would open the microphone.
+        for stem in ("alt", "ctrl", "shift", "cmd", "super"):
             if name.startswith(stem):
-                return stem
+                return "cmd" if stem == "super" else stem
         return name
 
     def _pressed(self, key):

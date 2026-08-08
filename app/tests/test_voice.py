@@ -73,3 +73,33 @@ def test_a_spec_with_two_letters_is_refused():
     # RegisterHotKey takes modifiers plus one key. Two letters need a
     # low-level hook, and Alt+D would fire before the J arrived.
     assert hotkey.parse("alt+d+j") is None
+
+
+def test_win_combo_parses():
+    mods, vk = hotkey.parse("win+j")
+    assert mods == hotkey.MOD_WIN | hotkey.MOD_NOREPEAT
+    assert vk == ord("J")
+
+
+def test_wanted_set_includes_win():
+    # _wanted() once checked only alt/ctrl/shift, so a combo parsed from
+    # "win+j" needed no modifier at all on macOS and Linux -- plain j would
+    # open the microphone.
+    mods, vk = hotkey.parse("win+j")
+    wanted = hotkey._PynputHotkey(mods, vk, None, None)._wanted()
+    assert wanted == {"j", "cmd"}
+
+
+def test_wanted_set_for_a_named_key():
+    # chr(vk) for scrolllock is an unprintable control character, not
+    # pynput's own name for the key, so the two would never compare equal
+    # and the hotkey would silently never fire.
+    mods, vk = hotkey.parse("ctrl+scrolllock")
+    wanted = hotkey._PynputHotkey(mods, vk, None, None)._wanted()
+    assert wanted == {"scroll_lock", "ctrl"}
+
+
+def test_wanted_set_for_a_multi_modifier_combo():
+    mods, vk = hotkey.parse("ctrl+shift+j")
+    wanted = hotkey._PynputHotkey(mods, vk, None, None)._wanted()
+    assert wanted == {"j", "ctrl", "shift"}
