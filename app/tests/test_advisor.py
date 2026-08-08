@@ -19,6 +19,7 @@ PROFILE = """
 ## Mood → seed directions
 
 - **tense / debugging** → warm soul: Bill Withers, Al Green, Lee Fields.
+- **focus / coding** → low-vocal, instrumental-leaning: Daft Punk, Bonobo.
 - **loose / late night** → feel-good: Bon Entendeur, Gipsy Kings.
 """
 
@@ -243,3 +244,61 @@ def test_nothing_anywhere_returns_empty_rather_than_raising():
     # the caller has to hear about that as an empty list, not an exception.
     assert advisor.picks_for("debugging", "tense", seeds={}, history={},
                              ratings={}, profile="", runner=reply("")) == []
+
+
+# ------------------------------------------------------------------- steer
+
+def test_the_spoken_request_reaches_the_prompt_verbatim():
+    prompt = advisor.build_prompt("profile", "coding", "focus", {}, {},
+                                  steer="un truc plus calme, moins de voix")
+    assert "un truc plus calme, moins de voix" in prompt
+    assert "out loud" in prompt
+
+
+def test_the_spoken_request_outranks_the_rest_of_the_prompt():
+    # It is the last thing they said, so it has to beat the register the
+    # ratings built up. Saying so is the whole mechanism.
+    prompt = advisor.build_prompt("profile", "coding", "focus", {}, {},
+                                  steer="plus calme")
+    assert "outranks" in prompt
+
+
+def test_the_spoken_request_sits_after_the_taste_sections():
+    ratings = library.rate({}, {"catalogId": "c1", "title": "T",
+                                "artist": "A"}, "coding", 5)
+    prompt = advisor.build_prompt("profile", "coding", "focus", {}, ratings,
+                                  steer="plus calme")
+    assert prompt.index("plus calme") > prompt.index("5 stars")
+
+
+def test_no_spoken_request_leaves_the_prompt_as_it_was():
+    assert "out loud" not in advisor.build_prompt("p", "coding", "focus", {}, {})
+
+
+def test_seed_artists_are_found_in_what_they_said():
+    assert advisor.seed_artists_from("encore du Daft Punk", SEEDS) == ["Daft Punk"]
+
+
+def test_seed_artists_ignore_case_and_surrounding_words():
+    assert advisor.seed_artists_from("mets moi du bill withers là",
+                                     SEEDS) == ["Bill Withers"]
+
+
+def test_seed_artists_come_back_empty_when_nobody_is_named():
+    assert advisor.seed_artists_from("un truc plus calme", SEEDS) == []
+    assert advisor.seed_artists_from(None, SEEDS) == []
+
+
+def test_the_fallback_plays_the_artist_they_named_when_claude_is_down():
+    # Claude unavailable, and they asked for someone by name. The profile
+    # picker cannot read French, but it can recognise a name it already has.
+    picks = advisor.picks_for("coding", "focus", seeds=SEEDS,
+                              runner=reply(None), steer="encore du Daft Punk")
+    assert picks
+    assert all(p["artist"] == "Daft Punk" for p in picks)
+
+
+def test_the_fallback_is_unchanged_when_no_artist_is_named():
+    picks = advisor.picks_for("coding", "focus", seeds=SEEDS,
+                              runner=reply(None), steer="un truc plus calme")
+    assert picks          # still music, just not steered

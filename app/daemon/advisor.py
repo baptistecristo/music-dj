@@ -34,7 +34,7 @@ ADDITIONS_IN_PROMPT = 20
 
 
 def build_prompt(profile, mood, lane, history, ratings,
-                 signals=None, additions=None, now=None):
+                 signals=None, additions=None, now=None, steer=None):
     """Everything Claude needs to pick well, and nothing else."""
     recent = []
     for play in (history or {}).get("plays", [])[:RECENT_IN_PROMPT]:
@@ -112,6 +112,16 @@ def build_prompt(profile, mood, lane, history, ratings,
                   "Fresh interest. Weave these in when they fit the mood, "
                   "rather than only replaying old favourites."]
 
+    # Last, and said so, because it is the only part of this prompt they
+    # spoke out loud. Everything above is inferred from what they did; this
+    # is what they asked for, and a batch that ignores it is a batch that
+    # did not listen.
+    if steer:
+        parts += ["", "## What they just asked for, out loud",
+                  '"%s"' % steer,
+                  "This is the most recent thing they said and it outranks "
+                  "the register above wherever the two disagree."]
+
     parts += [
         "",
         "## Answer with JSON only",
@@ -140,6 +150,25 @@ def extract_json(text):
         return json.loads(text[start:end + 1])
     except Exception:
         return None
+
+
+def seed_artists_from(text, seeds):
+    """Artists from their profile that appear in what they said.
+
+    The fallback picker cannot read French, so when Claude is unavailable a
+    spoken request would evaporate. This is the one thing the fallback can do
+    with a sentence: notice a name it already knows. "Encore du Daft Punk" is
+    the likeliest thing anyone says to this, and it costs a substring match.
+    """
+    if not text:
+        return []
+    said = str(text).lower()
+    found = []
+    for artists in (seeds or {}).values():
+        for artist in artists:
+            if artist.lower() in said and artist not in found:
+                found.append(artist)
+    return found
 
 
 def ask_claude(prompt, timeout=TIMEOUT, runner=None):
@@ -201,7 +230,8 @@ def _kill_tree(proc):
 
 
 def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,
-              profile=None, runner=None, rng=None, timeout=TIMEOUT):
+              profile=None, runner=None, rng=None, timeout=TIMEOUT,
+              steer=None):
     """Claude's picks for this mood, falling back to the profile.
 
     Always returns something playable as long as the profile has seeds.
@@ -213,7 +243,8 @@ def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,
     additions = store.read_json(store.LIBRARY_RECENT, {})
 
     prompt = build_prompt(profile, mood, lane, history, ratings,
-                          signals=signals, additions=additions, now=time.time())
+                          signals=signals, additions=additions, now=time.time(),
+                          steer=steer)
     raw = ask_claude(prompt, timeout=timeout, runner=runner)
     picks = picker.validate_claude_picks(extract_json(raw)) if raw else []
 
@@ -228,5 +259,14 @@ def picks_for(mood, lane, *, seeds=None, history=None, ratings=None,
 
     recent_artists = [p.get("artist")
                       for p in (history or {}).get("plays", [])[:12]]
+
+    # They named someone and Claude is not here to act on it. Play that
+    # artist rather than dropping the request on the floor. No avoid list:
+    # the whole point is the artist they just asked for, and "recently
+    # played" is exactly what "encore" means.
+    named = seed_artists_from(steer, seeds)
+    if named:
+        return picker.profile_batch({lane: named}, lane, count=BATCH, rng=rng)
+
     return picker.profile_batch(seeds or {}, lane, count=BATCH,
                                 avoid_artists=recent_artists, rng=rng)
