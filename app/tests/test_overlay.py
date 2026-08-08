@@ -140,3 +140,28 @@ def test_alpha_changes_are_a_no_op_without_a_window_handle(monkeypatch):
     monkeypatch.setattr(app, "_hwnd", None)
     app.set_alpha(200)                   # must not raise
     app.fade_alpha(120)
+
+
+def test_the_page_shows_what_it_heard_you_say():
+    # Picking takes seventeen seconds. Without the chip, holding the key
+    # looks like it did nothing at all.
+    body = page()
+    assert 'id="steer"' in body
+    assert "state.steer" in body
+
+
+def test_the_steer_chip_can_be_cleared():
+    assert 'send({action: "clearSteer"})' in page()
+
+
+def test_the_page_shows_when_the_microphone_is_open():
+    # The cover is the only part visible while the overlay is closed, so the
+    # class has to reach it, not just exist somewhere in the file.
+    body = page()
+    assert 'classList.toggle("listening"' in body
+    assert re.search(r"body\.listening\s+#art", body)
+
+
+def test_an_empty_steer_takes_up_no_room():
+    # Same rule the notice follows: nothing to say, nothing on screen.
+    assert "#steer:empty" in page()
