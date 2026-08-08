@@ -262,6 +262,7 @@ class DJ:
         async with self._refill_lock:
             self.refresh_seeds()
             mood, lane = self.mood, self.lane
+            said = self.steer_text()
             # The Claude picker shells out and can sit there for 15s. Run it
             # off the event loop or playback events queue up behind it and the
             # music stutters between tracks.
@@ -275,6 +276,15 @@ class DJ:
                 # Resolving took long enough for the mood to move on. Writing
                 # this batch would label the new queue with the old mood.
                 log.info("dropping stale refill for %s/%s", mood, lane)
+                return
+
+            if self.steer_text() != said:
+                # They spoke while this was in flight. on_steer already
+                # emptied the queue, so writing these picks would fill it
+                # with songs chosen before they said anything -- and the
+                # first of them is what play_next reaches for. The newer
+                # steer has its own refill queued behind this lock.
+                log.info("dropping a refill the steer overtook")
                 return
 
             resolved = library.dedupe_picks(
@@ -555,7 +565,10 @@ class DJ:
             # most irritating bug this feature could have.
             return
         self.steer = {"text": text, "at": self.now()}
-        log.info("steer: %s", text)
+        # The length, not the sentence. start.sh appends this log to
+        # $TMPDIR/music-dj.log, which outlives the process, and what they said
+        # is supposed to be gone at the next restart.
+        log.info("steer heard (%d chars)", len(text))
         # The chip lands before the seventeen seconds of picking, so holding
         # the key has a visible answer straight away.
         self.push()

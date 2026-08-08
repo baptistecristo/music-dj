@@ -5,9 +5,11 @@ real ~/.music-dj.
 """
 
 import asyncio
+import logging
 import os
 import random
 import sys
+import time
 
 import pytest
 
@@ -1549,6 +1551,93 @@ async def test_an_empty_steer_changes_nothing():
     await dj.on_steer("   ")
     assert dj.steer_text() is None
     assert dj.current["catalogId"] == first
+
+
+@pytest.mark.asyncio
+async def test_what_they_said_never_reaches_the_log(caplog):
+    # start.sh appends the daemon's output to $TMPDIR/music-dj.log, which
+    # outlives the process. The promise is that a restart forgets what you
+    # said, and a log line spelling it out breaks that promise on disk.
+    dj = make_dj()
+    with caplog.at_level(logging.DEBUG, logger="music-dj"):
+        await dj.on_steer("un truc plus calme, moins de voix")
+    assert "moins de voix" not in caplog.text
+    assert "plus calme" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_typed_steer_is_no_more_loggable_than_a_spoken_one(caplog):
+    dj = make_dj()
+    with caplog.at_level(logging.DEBUG, logger="music-dj"):
+        await dj.on_action({"action": "steer", "text": "moins de voix"})
+    assert "moins de voix" not in caplog.text
+
+
+def watch_plays(dj):
+    """Every pick that actually reached the player, in the order it did.
+
+    Asserting on the queue at the end is not enough: a track chosen before
+    they spoke can be played and popped long before the test looks.
+    """
+    played = []
+    real = dj._play_next
+
+    async def spy():
+        out = await real()
+        if dj.current:
+            played.append(dj.current.get("why"))
+        return out
+
+    dj._play_next = spy
+    return played
+
+
+@pytest.mark.asyncio
+async def test_a_refill_in_flight_does_not_bury_a_steer():
+    # on_steer empties the queue and then waits its turn on the refill lock.
+    # The refill already in flight recomputes what to keep against the queue
+    # it just emptied and writes its pre-steer picks in, so the track that
+    # played next was chosen before they opened their mouth.
+    tx = FakeTransport()
+    tx.search_delay = 0.2
+    dj = make_dj(tx)
+    dj.picks_for = lambda mood, lane: [
+        {"title": "T", "artist": "A",
+         "why": "after" if dj.steer_text() else "before"}]
+    played = watch_plays(dj)
+
+    inflight = asyncio.create_task(dj.refill())
+    await asyncio.sleep(0.05)
+    await dj.on_steer("plus calme")
+    await inflight
+
+    assert "before" not in played, "played a track chosen before they spoke"
+    assert "before" not in [t.get("why")
+                            for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_the_second_of_two_steers_wins():
+    # Speaking twice inside the seventeen seconds one pick takes. The first
+    # steer's batch must not land on top of the second one's.
+    tx = FakeTransport()
+    dj = make_dj(tx)
+
+    def slow_picks(mood, lane):
+        said = dj.steer_text()
+        time.sleep(0.2)      # runs in the executor, like the real picker
+        return [{"title": "T", "artist": "A", "why": said}]
+
+    dj.picks_for = slow_picks
+    played = watch_plays(dj)
+    first = asyncio.create_task(dj.on_steer("plus calme"))
+    await asyncio.sleep(0.05)
+    await dj.on_steer("plus rapide")
+    await first
+
+    assert "plus calme" not in played, "played a pick from the steer they replaced"
+    assert "plus calme" not in [t.get("why")
+                                for t in library.queue_tracks(dj.queue)]
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,13 @@ async def run(args):
         # whenever the CLI is missing, slow, or unhelpful.
         dj.picks_for = lambda mood, lane: advisor.picks_for(
             mood, lane, seeds=dj.seeds, rng=dj.rng, steer=dj.steer_text())
+    else:
+        # The profile picker takes no steer, so without Claude the key still
+        # ducks the music, moves the track and shows the chip -- and changes
+        # nothing about what plays. Say so, rather than let it look broken.
+        logging.getLogger("music-dj").info(
+            "--no-claude: the profile picks on its own, so talking to the DJ "
+            "changes nothing")
     transport.on_event = dj.on_event
 
     # Optional and best-effort: a missing package, an unavailable microphone

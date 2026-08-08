@@ -195,7 +195,7 @@ toolbar, and a key you hold to tell it what you want out loud. See
 
 ## Engineering notes
 
-- **275 automated tests**, run on Windows, macOS and Linux on every push. The
+- **341 automated tests**, run on Windows, macOS and Linux on every push. The
   browser is mocked, so playback, queueing, mood changes, ratings and the
   whole learning model are tested without a browser open.
 - **Every failure has a path back.** A missing model, a timed-out search, a
@@ -214,6 +214,12 @@ toolbar, and a key you hold to tell it what you want out loud. See
   prompt carries your taste profile, recent plays and ratings, the same as
   anything else you send Claude. Run the daemon with `--no-claude` and the
   picking never leaves your machine.
+- The standalone app has a microphone. It opens while you hold the key and at
+  no other time; nothing listens between presses, and there is no wake word.
+- A model on your machine turns the clip into text. The recording never
+  reaches a file, and it is gone as soon as the model has read it.
+- That sentence goes to Claude in the batch prompt, next to your taste profile
+  and recent plays, like everything else there.
 
 ## License
 

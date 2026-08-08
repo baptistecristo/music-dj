@@ -13,14 +13,25 @@ from . import hotkey, listen
 log = logging.getLogger("music-dj")
 
 DUCK_LEVEL = 0.15         # quiet enough to talk over, loud enough to still be on
+# Generous for a clip capped at 15 seconds. It exists for the transcriber that
+# never comes back at all, not for the slow one.
+TRANSCRIBE_TIMEOUT = 60
 
 
 class Voice:
     def __init__(self, dj, loop, *, recorder, transcriber,
-                 duck_level=DUCK_LEVEL):
+                 duck_level=DUCK_LEVEL, timeout=TRANSCRIBE_TIMEOUT):
         self.dj, self.loop = dj, loop
         self.recorder, self.transcriber = recorder, transcriber
         self.duck_level = duck_level
+        self.timeout = timeout
+        # Two flags, because they answer two different questions. `recording`
+        # is true only between the press and the release; `busy` spans the
+        # whole cycle, transcription included. One flag doing both meant a
+        # second release finished a recording that was never started, which
+        # cleared the flag the real release needed and left the microphone
+        # open for the rest of the session.
+        self.recording = False
         self.busy = False
         # The loop keeps only weak references to tasks, so a bare create_task
         # can be collected mid-flight. Same pattern as core.DJ._spawn.
@@ -41,14 +52,27 @@ class Voice:
             # Key auto-repeat that got past MOD_NOREPEAT, or a second press
             # while the last sentence is still being transcribed.
             return
-        self.busy = True
-        self.recorder.start()
-        self.dj.set_listening(True)
-        self._spawn(self.dj.duck(self.duck_level))
+        self.busy = self.recording = True
+        try:
+            self.recorder.start()
+            self.dj.set_listening(True)
+            # Spawned last, so a microphone that refuses to open has nothing
+            # ducked to put back.
+            self._spawn(self.dj.duck(self.duck_level))
+        except Exception:
+            # Latching the flags on the way out would swallow every later
+            # press, which is the same stuck microphone by another door.
+            self.busy = self.recording = False
+            self.dj.set_listening(False)
+            log.info("could not start listening", exc_info=True)
 
     def _stop(self):
-        if not self.busy:
+        if not self.recording:
+            # A release can only end a recording that exists. Guarding on
+            # `busy` instead let a second release start a phantom _finish for
+            # a recording nobody made.
             return
+        self.recording = False
         self._spawn(self._finish())
 
     async def _finish(self):
@@ -58,8 +82,11 @@ class Voice:
             if audio is not None:
                 # Whisper holds the GIL for a second or more. On the loop it
                 # would freeze playback events for the whole transcription.
-                text = await self.loop.run_in_executor(
-                    None, self.transcriber, audio)
+                # The timeout abandons the wait, not the thread -- a worker
+                # cannot be cancelled -- but the music comes back either way.
+                text = await asyncio.wait_for(
+                    self.loop.run_in_executor(None, self.transcriber, audio),
+                    timeout=self.timeout)
         except Exception:
             log.info("could not make out what was said", exc_info=True)
         finally:
@@ -75,8 +102,16 @@ class Voice:
     def _spawn(self, coro):
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._task_done)
         return task
+
+    def _task_done(self, task):
+        self._tasks.discard(task)
+        # on_steer runs through here, and it holds the Claude call, the queue
+        # rebuild and play_next. Under pythonw even asyncio's own warning
+        # about an unretrieved exception goes nowhere. Same as core.DJ.
+        if not task.cancelled() and task.exception() is not None:
+            log.error("voice task failed", exc_info=task.exception())
 
 
 def start(dj, loop, config):

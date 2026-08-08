@@ -289,6 +289,19 @@ def test_seed_artists_come_back_empty_when_nobody_is_named():
     assert advisor.seed_artists_from(None, SEEDS) == []
 
 
+def test_an_ordinary_word_that_contains_an_artist_is_not_a_seed():
+    # "clair" contains "air". A bare substring match turned an ordinary
+    # sentence into a whole batch of Air, with no avoid list, from a request
+    # that never named them.
+    assert advisor.seed_artists_from("un truc plus clair",
+                                     {"focus": ["Air"]}) == []
+
+
+def test_the_artist_is_still_found_when_they_do_name_them():
+    assert advisor.seed_artists_from("mets moi du Air là",
+                                     {"focus": ["Air"]}) == ["Air"]
+
+
 def test_the_fallback_plays_the_artist_they_named_when_claude_is_down():
     # Claude unavailable, and they asked for someone by name. The profile
     # picker cannot read French, but it can recognise a name it already has.

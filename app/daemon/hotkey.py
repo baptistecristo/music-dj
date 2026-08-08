@@ -236,7 +236,9 @@ def _spell(mods, vk):
     names = [n for n, bit in (("Alt", MOD_ALT), ("Ctrl", MOD_CONTROL),
                               ("Shift", MOD_SHIFT), ("Win", MOD_WIN))
              if mods & bit]
-    return "+".join(names + [chr(vk)])
+    # chr(vk) for a named key is an unprintable control character, printed in
+    # the very warning whose job is to say which key is taken.
+    return "+".join(names + [_NAMED_KEY_NAMES.get(vk) or chr(vk)])
 
 
 def start(spec, on_press, on_release):

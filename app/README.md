@@ -109,11 +109,23 @@ Alt+J rather than a chord: `RegisterHotKey` takes modifiers plus one key, and
 Windows swallows the combo before any application sees it. Alt+D+J would need a
 low-level hook and would send a real Alt+D to whatever you were looking at on
 the way to the J. Set `voice.hotkey` in `config.json` if something else already
-holds it.
+holds it. That key and the rest of the `voice` block:
 
-On macOS you must grant accessibility permission before the key is seen at all,
-and on Linux it needs X11. Without either, everything else works and voice
-stays off.
+| key | default | what it does |
+|---|---|---|
+| `enabled` | `true` | `false` turns voice off without uninstalling anything |
+| `hotkey` | `alt+j` | modifiers plus one key, e.g. `ctrl+shift+j` |
+| `model` | `small` | Whisper model. `base` mishears French, `medium` is four times slower |
+| `language` | `fr` | pinned, not detected |
+| `duck_level` | `0.15` | where the music sits while you talk |
+| `no_speech_threshold` | `0.6` | above this, the clip is treated as a cough and ignored |
+
+The key is verified on Windows. On Linux it needs X11 and on macOS an
+accessibility grant, and nobody has sat down in front of either with this,
+which is worth knowing before you rely on it. macOS carries one specific
+doubt: Option+J is likely to arrive as the character `∆` rather than `j`, in
+which case the default combo never fires. Set `voice.hotkey` to something else
+if that is what you get. Everything outside voice works either way.
 
 **Previous** restarts the song. Press it again within the first few seconds
 and it goes back one — the playhead is at zero by then, so the second press

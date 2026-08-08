@@ -11,6 +11,7 @@ the reason the music stops.
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -158,7 +159,11 @@ def seed_artists_from(text, seeds):
     The fallback picker cannot read French, so when Claude is unavailable a
     spoken request would evaporate. This is the one thing the fallback can do
     with a sentence: notice a name it already knows. "Encore du Daft Punk" is
-    the likeliest thing anyone says to this, and it costs a substring match.
+    the likeliest thing anyone says to this, and it costs one match.
+
+    On word boundaries, because a bare substring match makes ordinary French a
+    seed: "un truc plus clair" contains "air", and the rescue path then hands
+    back a whole batch of Air from a sentence that never named them.
     """
     if not text:
         return []
@@ -166,7 +171,8 @@ def seed_artists_from(text, seeds):
     found = []
     for artists in (seeds or {}).values():
         for artist in artists:
-            if artist.lower() in said and artist not in found:
+            pattern = r"\b%s\b" % re.escape(artist.lower())
+            if re.search(pattern, said) and artist not in found:
                 found.append(artist)
     return found
 
