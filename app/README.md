@@ -91,6 +91,30 @@ system's blur, hidden and shown rather than faded. `overlay/app.py` returns
 early from every Win32 call off Windows; the callers all had a fallback
 already, because those calls can fail on the wrong Windows build too.
 
+**Talk to it.** Hold Alt+J, say what you want in French, let go. The music
+ducks to 15% while you speak, Whisper turns the clip into text on your machine,
+and the sentence goes into Claude's next prompt whole -- so nothing here parses
+French. The queue is rebuilt on the spot and the current track goes with it.
+What you said sits in the overlay as a chip for twenty minutes; click it to
+forget it.
+
+Voice is off until you install it:
+
+```
+python -m pip install -r requirements-voice.txt
+python -m daemon.listen --warm      # ~500MB, once
+```
+
+Alt+J rather than a chord: `RegisterHotKey` takes modifiers plus one key, and
+Windows swallows the combo before any application sees it. Alt+D+J would need a
+low-level hook and would send a real Alt+D to whatever you were looking at on
+the way to the J. Set `voice.hotkey` in `config.json` if something else already
+holds it.
+
+On macOS you must grant accessibility permission before the key is seen at all,
+and on Linux it needs X11. Without either, everything else works and voice
+stays off.
+
 **Previous** restarts the song. Press it again within the first few seconds
 and it goes back one — the playhead is at zero by then, so the second press
 takes the other branch without anything counting clicks.

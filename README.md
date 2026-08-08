@@ -187,8 +187,9 @@ You need Claude Code, Python 3, one of the browsers above with the Claude in
 Chrome extension, and an account on your music service.
 
 There is also a **standalone app** for Apple Music that runs without Claude
-Code once started, with its own overlay and one-click launch from the
-browser toolbar. See [app/README.md](app/README.md).
+Code once started, with its own overlay, one-click launch from the browser
+toolbar, and a key you hold to tell it what you want out loud. See
+[app/README.md](app/README.md).
 
 ---
 
