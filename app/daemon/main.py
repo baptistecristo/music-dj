@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import logging
 
-from . import advisor, core, server, store
+from . import advisor, core, server, store, voice
 
 
 def setup_logging(verbose):
@@ -34,6 +34,11 @@ async def run(args):
             mood, lane, seeds=dj.seeds, rng=dj.rng, steer=dj.steer_text())
     transport.on_event = dj.on_event
 
+    # Optional and best-effort: a missing package, an unavailable microphone
+    # or a key another program already holds all end the same way, with the
+    # daemon running exactly as it did before.
+    key = voice.start(dj, asyncio.get_running_loop(), config)
+
     srv = server.Server(dj, transport, port=args.port)
     logging.getLogger("music-dj").info(
         "mood %s (lane %s); waiting for the extension", dj.mood, dj.lane)
@@ -58,6 +63,8 @@ async def run(args):
     # The shutdown broadcast to the overlay rides on tasks created just
     # before the event was set; give them a beat to flush.
     await asyncio.sleep(0.2)
+    if key is not None:
+        key.stop()
     logging.getLogger("music-dj").info("daemon stopped")
     if failed:
         raise SystemExit(1)

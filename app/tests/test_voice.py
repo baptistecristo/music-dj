@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from daemon import listen  # noqa: E402
 from daemon import hotkey  # noqa: E402
+from daemon import voice  # noqa: E402
 
 
 def test_silence_is_not_worth_acting_on():
@@ -103,3 +104,140 @@ def test_wanted_set_for_a_multi_modifier_combo():
     mods, vk = hotkey.parse("ctrl+shift+j")
     wanted = hotkey._PynputHotkey(mods, vk, None, None)._wanted()
     assert wanted == {"j", "ctrl", "shift"}
+
+
+class FakeRecorder:
+    def __init__(self, clip="audio"):
+        self.clip, self.started, self.stopped = clip, 0, 0
+
+    def start(self):
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+        return self.clip
+
+
+class FakeDJ:
+    """Only the surface voice.py touches."""
+
+    def __init__(self):
+        self.ducked, self.unducked, self.steers, self.listening = [], 0, [], []
+
+    async def duck(self, level):
+        self.ducked.append(level)
+
+    async def unduck(self):
+        self.unducked += 1
+
+    async def on_steer(self, text):
+        self.steers.append(text)
+
+    def set_listening(self, flag):
+        self.listening.append(bool(flag))
+
+
+async def hold_and_release(v):
+    """One press, one release, and the work that follows."""
+    v.pressed()
+    await asyncio.sleep(0)
+    v.released()
+    for _ in range(6):        # let the finish task run to completion
+        await asyncio.sleep(0)
+    while v.busy:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_held_key_ducks_records_and_steers():
+    dj, rec = FakeDJ(), FakeRecorder()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=rec,
+                    transcriber=lambda audio: "un truc plus calme")
+    await hold_and_release(v)
+    assert dj.ducked == [0.15]
+    assert rec.started == 1 and rec.stopped == 1
+    assert dj.steers == ["un truc plus calme"]
+    assert dj.unducked == 1
+
+
+@pytest.mark.asyncio
+async def test_the_volume_comes_back_when_transcription_raises():
+    # Otherwise the music sits at 15% for the rest of the session and reads
+    # as a mixing problem nobody would connect to having spoken.
+    def boom(audio):
+        raise RuntimeError("model exploded")
+
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=boom)
+    await hold_and_release(v)
+    assert dj.unducked == 1
+    assert dj.steers == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_heard_means_nothing_happens():
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=lambda audio: "")
+    await hold_and_release(v)
+    assert dj.steers == []
+    assert dj.unducked == 1
+
+
+@pytest.mark.asyncio
+async def test_a_second_press_mid_transcription_is_ignored():
+    dj, rec = FakeDJ(), FakeRecorder()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=rec,
+                    transcriber=lambda audio: "plus calme")
+    v.pressed()
+    v.pressed()
+    await asyncio.sleep(0)
+    assert rec.started == 1
+    v.released()
+    while v.busy:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_release_with_no_press_does_nothing():
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=lambda audio: "plus calme")
+    v.released()
+    await asyncio.sleep(0)
+    assert dj.steers == [] and dj.unducked == 0
+
+
+@pytest.mark.asyncio
+async def test_the_overlay_is_told_when_the_mic_opens_and_closes():
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=lambda audio: "plus calme")
+    await hold_and_release(v)
+    assert dj.listening == [True, False]
+
+
+def test_voice_stays_off_without_the_packages(monkeypatch):
+    monkeypatch.setattr(voice.listen, "available", lambda: False)
+    assert voice.start(FakeDJ(), None, {}) is None
+
+
+def test_voice_stays_off_when_it_is_switched_off(monkeypatch):
+    monkeypatch.setattr(voice.listen, "available", lambda: True)
+    assert voice.start(FakeDJ(), None, {"voice": {"enabled": False}}) is None
+
+
+def test_nothing_reachable_from_the_ui_can_open_the_microphone():
+    # server.py admits in its own comment that any page served from this
+    # machine can reach /ui. Text arriving from one is annoying. A microphone
+    # it can open is a different category of problem, and the guarantee is
+    # the dependency direction: voice imports core, core knows nothing of the
+    # microphone, so no UI action can reach it however the actions grow.
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    body = open(os.path.join(here, "daemon", "core.py"), encoding="utf-8").read()
+    imports = [line for line in body.splitlines()
+               if line.startswith(("import ", "from "))]
+    assert imports
+    assert not [line for line in imports
+                if "listen" in line or "voice" in line or "hotkey" in line]
