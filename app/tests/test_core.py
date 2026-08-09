@@ -9,6 +9,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 
 import pytest
@@ -460,6 +461,62 @@ async def test_unpinning_hands_control_back_to_state_json():
     await dj.set_mood("loose", pinned=True, force=True)
     await dj.on_action({"action": "unpin"})
     assert dj.pinned is False and dj.mood == "coding"
+
+
+@pytest.mark.asyncio
+async def test_a_mood_click_answers_before_the_new_queue_is_built():
+    # The overlay's socket reads one action, awaits it, then reads the next.
+    # Rebuilding a queue is a picker run plus a search per track -- 86 seconds
+    # in the worst case seen in the wild -- so awaiting it inside the action
+    # left every click after a mood change sitting unread in the socket. The
+    # panel kept updating and answered nothing.
+    dj = make_dj()
+    dj.current = {"catalogId": "c1", "title": "T", "artist": "A"}
+    started, gate = threading.Event(), threading.Event()
+
+    def slow_picker(mood, lane):
+        started.set()
+        gate.wait(5)
+        return []
+
+    dj.picks_for = slow_picker
+    try:
+        await asyncio.wait_for(
+            dj.on_action({"action": "setMood", "mood": "mellow"}), 1)
+        # The click has its answer while the picking is still going.
+        assert dj.notice == "mellow from the next song"
+        assert await asyncio.to_thread(started.wait, 2)
+        assert any(not t.done() for t in dj._tasks)
+    finally:
+        gate.set()
+
+
+@pytest.mark.asyncio
+async def test_the_buttons_still_work_while_the_new_queue_is_being_built():
+    # The symptom this is really about: change the mood, then press pause and
+    # nothing happens. The socket was still inside the mood change.
+    tx = FakeTransport()
+    dj = make_dj(tx)
+    dj.current = {"catalogId": "c1", "title": "T", "artist": "A"}
+    dj.playing = True
+    started, gate = threading.Event(), threading.Event()
+
+    def slow_picker(mood, lane):
+        started.set()
+        gate.wait(5)
+        return []
+
+    dj.picks_for = slow_picker
+    try:
+        await asyncio.wait_for(
+            dj.on_action({"action": "setMood", "mood": "mellow"}), 1)
+        assert await asyncio.to_thread(started.wait, 2)
+        # The queue is still being built. Press pause anyway.
+        await asyncio.wait_for(dj.on_action({"action": "pause"}), 1)
+        assert {"cmd": "pause"} in tx.calls
+        assert dj.playing is False
+    finally:
+        gate.set()
 
 
 @pytest.mark.asyncio
