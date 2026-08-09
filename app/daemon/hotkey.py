@@ -36,6 +36,26 @@ _NAMED_KEYS = {"space": 0x20, "pause": 0x13, "scrolllock": 0x91}
 # no error to say why.
 _NAMED_KEY_NAMES = {0x20: "space", 0x13: "pause", 0x91: "scroll_lock"}
 
+# macOS tells you twice which key moved: the physical key, and the character
+# the layout made of it. With Option held that character is the composed one,
+# so Alt+J arrives as the Greek delta and matches the letter j nowhere. These
+# are Apple's fixed key positions, the same table pynput carries for its own
+# control-character fallback. Positions rather than letters: a layout that
+# moves the letters about will report the position, so set voice.hotkey to
+# whichever key sits there.
+MAC_KEYCODES = {
+    0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x", 8: "c",
+    9: "v", 11: "b", 12: "q", 13: "w", 14: "e", 15: "r", 16: "y", 17: "t",
+    18: "1", 19: "2", 20: "3", 21: "4", 22: "6", 23: "5", 24: "=", 25: "9",
+    26: "7", 27: "-", 28: "8", 29: "0", 30: "]", 31: "o", 32: "u", 33: "[",
+    34: "i", 35: "p", 37: "l", 38: "j", 39: "'", 40: "k", 41: ";", 42: "\\",
+    43: ",", 44: "/", 45: "n", 46: "m", 47: ".", 50: "`",
+    82: "0", 83: "1", 84: "2", 85: "3", 86: "4", 87: "5", 88: "6", 89: "7",
+    91: "8", 92: "9",
+}
+# Position 49 is the space bar, left out on purpose: "space" is a named key
+# here and pynput calls it Key.space, which the name branch catches first.
+
 POLL = 0.03               # how often the release is checked, in seconds
 
 
@@ -165,13 +185,18 @@ class _PynputHotkey:
     anything at all, and Linux needs X11.
     """
 
-    def __init__(self, mods, vk, on_press, on_release):
+    def __init__(self, mods, vk, on_press, on_release, keycodes=None):
         self.mods, self.vk = mods, vk
         self.on_press, self.on_release = on_press, on_release
         self._down = set()
         self._active = False
         self._listener = None
         self.failed = False
+        # Only macOS reports a key position. X11 puts the character's own code
+        # in vk, and reading that through Apple's table would turn a pressed
+        # ampersand into a j, so off macOS the table stays empty.
+        self.keycodes = keycodes if keycodes is not None else (
+            MAC_KEYCODES if sys.platform == "darwin" else {})
 
     def start(self):
         try:
@@ -202,27 +227,39 @@ class _PynputHotkey:
             keys |= {"cmd"}
         return keys
 
-    def _name(self, key):
+    def _names(self, key):
+        """Every token one key could answer to.
+
+        A letter key on macOS answers to two of them, the character and the
+        position, and which one is the letter you asked for depends on the
+        modifier held. Take both rather than pick.
+        """
+        name = getattr(key, "name", "") or ""
+        if name:
+            # "win"/"super" in a spec and "cmd" from pynput must land on the
+            # same token, or a combo parsed from "win+j" needs no modifier at
+            # all on macOS and Linux -- plain j would open the microphone.
+            for stem in ("alt", "ctrl", "shift", "cmd", "super"):
+                if name.startswith(stem):
+                    return {"cmd" if stem == "super" else stem}
+            return {name}
+        found = set()
         char = getattr(key, "char", None)
         if char:
-            return char.lower()
-        name = getattr(key, "name", "") or ""
-        # "win"/"super" in a spec and "cmd" from pynput must land on the same
-        # token, or a combo parsed from "win+j" needs no modifier at all on
-        # macOS and Linux -- plain j would open the microphone.
-        for stem in ("alt", "ctrl", "shift", "cmd", "super"):
-            if name.startswith(stem):
-                return "cmd" if stem == "super" else stem
-        return name
+            found.add(char.lower())
+        letter = self.keycodes.get(getattr(key, "vk", None))
+        if letter:
+            found.add(letter)
+        return found
 
     def _pressed(self, key):
-        self._down.add(self._name(key))
+        self._down |= self._names(key)
         if not self._active and self._wanted() <= self._down:
             self._active = True
             self.on_press()
 
     def _released(self, key):
-        self._down.discard(self._name(key))
+        self._down -= self._names(key)
         if self._active and not self._wanted() <= self._down:
             self._active = False
             self.on_release()
@@ -259,5 +296,10 @@ def start(spec, on_press, on_release):
         key = _PynputHotkey(mods, vk, on_press, on_release).start()
         if key.failed:
             return None
+        if sys.platform == "darwin":
+            # Without the grant macOS hands pynput no keys at all and says
+            # nothing, which reads exactly like a hotkey that does not work.
+            log.info("macOS only delivers the key once this app is ticked "
+                     "under Privacy & Security > Accessibility")
     log.info("hold %s and talk to the DJ", _spell(mods, vk))
     return key

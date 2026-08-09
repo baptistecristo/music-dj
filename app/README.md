@@ -128,12 +128,17 @@ holds it. That key and the rest of the `voice` block:
 | `duck_level` | `0.15` | where the music sits while you talk |
 | `no_speech_threshold` | `0.6` | above this, the clip is treated as a cough and ignored |
 
-The key is verified on Windows. On Linux it needs X11 and on macOS an
-accessibility grant, and nobody has sat down in front of either with this,
-which is worth knowing before you rely on it. macOS carries one specific
-doubt: Option+J is likely to arrive as the character `∆` rather than `j`, in
-which case the default combo never fires. Set `voice.hotkey` to something else
-if that is what you get. Everything outside voice works either way.
+The key is verified on Windows. Linux needs X11, macOS needs this app ticked
+under Privacy & Security > Accessibility, and nobody has sat down in front of
+either with this, which is worth knowing before you rely on it. Everything
+outside voice works either way.
+
+macOS answers twice about a key: the character the layout printed, and the
+position of the key that printed it. Option+J prints `∆`, so a hotkey read
+from the character alone could never fire there. The DJ takes both answers and
+Alt+J matches on the position. Tests cover that and nothing else does. The
+position is a US board's, so on a layout that moves the letters about, set
+`voice.hotkey` to the key sitting where J sits there.
 
 **Previous** restarts the song. Press it again within the first few seconds
 and it goes back one — the playhead is at zero by then, so the second press

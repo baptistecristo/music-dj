@@ -195,7 +195,7 @@ toolbar, and a key you hold to tell it what you want out loud. See
 
 ## Engineering notes
 
-- **355 automated tests**, run on Windows, macOS and Linux on every push. The
+- **360 automated tests**, run on Windows, macOS and Linux on every push. The
   browser is mocked, so playback, queueing, mood changes, ratings and the
   whole learning model are tested without a browser open.
 - **Every failure has a path back.** A missing model, a timed-out search, a

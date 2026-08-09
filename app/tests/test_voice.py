@@ -109,6 +109,89 @@ def test_wanted_set_for_a_multi_modifier_combo():
     assert wanted == {"j", "ctrl", "shift"}
 
 
+class FakeKey:
+    """A pynput KeyCode: the character the layout made, and the key that
+    made it. No name, which is how pynput tells letters from Key members."""
+
+    name = None
+
+    def __init__(self, char, vk):
+        self.char, self.vk = char, vk
+
+
+class FakeModifier:
+    """A pynput Key member, which carries a name and no character."""
+
+    char = None
+
+    def __init__(self, name):
+        self.name = name
+
+
+def test_option_j_still_matches_the_letter_on_macos():
+    # macOS composes Option+J into a Greek delta and reports that as the
+    # character, so matching the character alone meant the default combo
+    # could never fire there. It reports the key's position too, and that
+    # does not move when a modifier changes what the key prints.
+    heard = []
+    mods, vk = hotkey.parse("alt+j")
+    key = hotkey._PynputHotkey(mods, vk, lambda: heard.append("down"),
+                               lambda: heard.append("up"),
+                               keycodes=hotkey.MAC_KEYCODES)
+    key._pressed(FakeModifier("alt"))
+    key._pressed(FakeKey("∆", 38))
+    assert heard == ["down"]
+    key._released(FakeKey("∆", 38))
+    assert heard == ["down", "up"]
+
+
+def test_the_letter_itself_still_matches_where_the_layout_gives_it():
+    # Linux, and any macOS combo whose modifier leaves the character alone.
+    heard = []
+    mods, vk = hotkey.parse("alt+j")
+    key = hotkey._PynputHotkey(mods, vk, lambda: heard.append("down"),
+                               lambda: heard.append("up"),
+                               keycodes=hotkey.MAC_KEYCODES)
+    key._pressed(FakeModifier("alt"))
+    key._pressed(FakeKey("j", 38))
+    assert heard == ["down"]
+
+
+def test_a_mac_key_position_is_not_read_off_macos():
+    # X11 puts the character's own code in vk, where 38 is an ampersand.
+    # Read through Apple's table that would open the microphone on a key
+    # nobody bound.
+    heard = []
+    mods, vk = hotkey.parse("alt+j")
+    key = hotkey._PynputHotkey(mods, vk, lambda: heard.append("down"),
+                               lambda: heard.append("up"), keycodes={})
+    key._pressed(FakeModifier("alt"))
+    key._pressed(FakeKey("&", 38))
+    assert heard == []
+
+
+def test_the_mac_table_is_loaded_on_macos_and_nowhere_else(monkeypatch):
+    mods, vk = hotkey.parse("alt+j")
+    monkeypatch.setattr(hotkey.sys, "platform", "darwin")
+    mac = hotkey._PynputHotkey(mods, vk, None, None)
+    assert mac.keycodes == hotkey.MAC_KEYCODES
+    monkeypatch.setattr(hotkey.sys, "platform", "linux")
+    assert hotkey._PynputHotkey(mods, vk, None, None).keycodes == {}
+
+
+def test_a_named_key_still_matches_by_its_name():
+    # The name branch runs first, so the space bar never reaches the table
+    # of positions -- where 49 would have made it a plain space.
+    heard = []
+    mods, vk = hotkey.parse("ctrl+space")
+    key = hotkey._PynputHotkey(mods, vk, lambda: heard.append("down"),
+                               lambda: heard.append("up"),
+                               keycodes=hotkey.MAC_KEYCODES)
+    key._pressed(FakeModifier("ctrl_l"))
+    key._pressed(FakeModifier("space"))
+    assert heard == ["down"]
+
+
 def test_a_named_key_is_spelled_with_its_name():
     # chr(0x91) is an unprintable control character, printed in the very
     # warning whose job is to say which key another program is holding.
