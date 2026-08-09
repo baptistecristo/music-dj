@@ -247,6 +247,10 @@ class FakeDJ:
 
     def __init__(self):
         self.ducked, self.unducked, self.steers, self.listening = [], 0, [], []
+        self.levels = []
+
+    def push_level(self, value):
+        self.levels.append(value)
 
     async def duck(self, level):
         self.ducked.append(level)
@@ -541,3 +545,19 @@ def test_nothing_reachable_from_the_ui_can_open_the_microphone():
     assert imports
     assert not [line for line in imports
                 if "listen" in line or "voice" in line or "hotkey" in line]
+
+
+@pytest.mark.asyncio
+async def test_the_level_bar_moves_while_the_key_is_held_and_stops_after():
+    # The whole point of the bar: a key that did nothing and a microphone
+    # that heard nothing look identical without it. It has to report while
+    # the key is down and go back to zero the moment it is not.
+    dj = FakeDJ()
+    recorder = FakeRecorder()
+    recorder.level = 0.4
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=recorder,
+                    transcriber=lambda audio: "plus calme")
+    await hold_and_release(v)
+    await settle()
+    assert 0.4 in dj.levels, "nothing reported while the key was held"
+    assert dj.levels[-1] == 0.0, "the bar was left where the last word put it"

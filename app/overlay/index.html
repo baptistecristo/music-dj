@@ -404,25 +404,93 @@
 
   #notice:empty { display: none; }
 
-  #steer {
-    color: var(--dim);
+  /* What you asked for, and where you change it. It stays whether or not you
+     have said anything, so a hotkey that will not fire, a package that will
+     not load or a microphone that hears nothing all still leave you a way to
+     steer the music. */
+  #ask {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-top: 4px;
+    flex: 0 0 auto;
+  }
+
+  #asktext {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
     font-family: var(--utility);
     font-size: 10px;
     font-style: italic;
     letter-spacing: .04em;
-    padding-top: 4px;
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 0 0 auto;
+    padding: 2px 0;
+    border-bottom: 1px solid transparent;
   }
 
-  #steer:empty { display: none; }
+  #asktext::placeholder { color: var(--dim); font-style: italic; }
+  #asktext:focus { border-bottom-color: var(--accent); }
+
+  #askclear {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: var(--dim);
+    font-size: 10px;
+    line-height: 1;
+    padding: 2px;
+    cursor: pointer;
+    visibility: hidden;
+  }
+
+  #askclear:hover { color: var(--text); }
+  #ask.has-text #askclear { visibility: visible; }
 
   /* The mic is open. The cover is the only part of the overlay visible when
      it is closed, so the breathing has to happen there. */
   body.listening #art { animation: breathe 1.2s ease-in-out infinite; }
+
+  /* The badge sits on the cover for the same reason: nobody hovers the panel
+     while they are talking. The bar under it moves with your voice, which is
+     the difference between a key that did nothing and a mic that heard
+     nothing -- a pulse alone cannot tell you which one you have. */
+  #mic {
+    position: absolute;
+    right: 4px; bottom: 4px;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 4px;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, .55);
+    pointer-events: none;
+  }
+
+  body.listening #mic { display: flex; }
+
+  #mic svg {
+    width: 10px; height: 14px;
+    display: block;
+    fill: var(--accent);
+    stroke: var(--accent);
+  }
+
+  #miclevel {
+    width: 18px; height: 2px;
+    border-radius: 1px;
+    background: rgba(255, 255, 255, .22);
+    overflow: hidden;
+  }
+
+  #micfill {
+    height: 100%; width: 0%;
+    background: var(--accent);
+    transition: width 70ms linear;
+  }
 
   @keyframes breathe {
     0%, 100% { opacity: 1; }
@@ -566,6 +634,16 @@
     <div id="cover" class="pywebview-drag-region">
       <img id="art" class="pywebview-drag-region"
            src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+      <!-- Drawn, not a glyph: the transport icons were a Windows-only font
+           once and came out as empty boxes everywhere else. -->
+      <div id="mic" class="pywebview-drag-region" title="The microphone is open">
+        <svg viewBox="0 0 10 14" aria-hidden="true">
+          <rect x="3" y="0" width="4" height="8" rx="2"></rect>
+          <path d="M1 6.5a4 4 0 0 0 8 0" fill="none" stroke-width="1.2"></path>
+          <rect x="4.4" y="10.5" width="1.2" height="3"></rect>
+        </svg>
+        <div id="miclevel"><div id="micfill"></div></div>
+      </div>
     </div>
     <div id="naming" class="panel pywebview-drag-region">
       <div id="title" class="pywebview-drag-region">Nothing playing</div>
@@ -608,8 +686,14 @@
   <div id="lyrics" class="panel"></div>
 
   <div id="notice" class="panel pywebview-drag-region"></div>
-  <div id="steer" class="panel pywebview-drag-region"
-       title="What you last asked for out loud. Click to forget it."></div>
+  <!-- No drag-region class on the input: a drag region swallows the click
+       that would have put the caret in it. -->
+  <div id="ask" class="panel">
+    <input id="asktext" type="text" spellcheck="false"
+           placeholder="ask for something"
+           title="Hold the key and say it, or type it here. Enter to send.">
+    <button id="askclear" type="button" title="Forget what you asked">&#x2715;</button>
+  </div>
 </div>
 
 <div id="moods"></div>
@@ -651,6 +735,8 @@ let lyricsNow = null;       // the line currently lit, so moves are one-off
 let posBase = 0;            // last playhead the daemon reported...
 let posAt = 0;              // ...and the wall clock when it landed
 let lastFit = 0;            // last height asked of the window
+let lastHeard = "";         // the transcript already put in the box
+let hovering = false;       // the pointer is over the window
 let veiled = false;         // window faded out because playback is paused
 let veilTimer = null;
 
@@ -712,9 +798,20 @@ function render() {
 
   el("notice").textContent = (state && state.notice) || "";
 
-  // Curly quotes so it reads as something you said, not as a label.
+  // A fresh transcript lands in the box ready to be corrected, selected so
+  // one keystroke replaces it. Never while you are typing: overwriting a
+  // half-finished sentence with what you said a minute ago is worse than
+  // showing nothing.
   const heard = (state && state.steer) || "";
-  el("steer").textContent = heard ? "“" + heard + "”" : "";
+  const box = el("asktext");
+  if (heard !== lastHeard) {
+    lastHeard = heard;
+    if (document.activeElement !== box) {
+      box.value = heard;
+      if (heard) { box.focus(); box.select(); }
+    }
+  }
+  el("ask").classList.toggle("has-text", !!box.value);
   document.body.classList.toggle("listening", !!(state && state.listening));
 
   // Ratings are per-mood, so the tooltip says which mood: one star while
@@ -1043,6 +1140,29 @@ function renderSetup() {
   });
 }
 
+// ------------------------------------------------------------------ the mic
+
+let levelAt = 0;                // when the last level message arrived
+
+function showLevel(value) {
+  levelAt = Date.now();
+  // Speech peaks around .05 to .3 and only shouting reaches 1. Linear, the
+  // bar would sit flat until you raised your voice, which is the opposite of
+  // what it is for. The root spreads the quiet end across the whole bar.
+  const v = Math.max(0, Math.min(1, Number(value) || 0));
+  el("micfill").style.width = (Math.sqrt(v) * 100).toFixed(1) + "%";
+}
+
+// The daemon sends a zero when the key comes up, but a daemon that dies
+// mid-sentence sends nothing at all, and a bar frozen at half looks like
+// something is still listening.
+setInterval(() => {
+  if (levelAt && Date.now() - levelAt > 500) {
+    levelAt = 0;
+    el("micfill").style.width = "0%";
+  }
+}, 250);
+
 // ------------------------------------------------------------------ socket
 
 function connect() {
@@ -1057,6 +1177,10 @@ function connect() {
       const msg = JSON.parse(ev.data);
       if (msg && msg.shutdown) {           // the daemon is exiting on purpose
         if (window.pywebview) pywebview.api.quit();
+        return;
+      }
+      if (msg && msg.type === "level") {   // how loud the mic is, nothing else
+        showLevel(msg.value);
         return;
       }
       // The playhead's clock restarts from every push that moves it; a push
@@ -1100,11 +1224,18 @@ function expand() {
   syncVeil();               // hovering cancels a pending vanish
 }
 
+function typingInBox() {
+  return document.activeElement === el("asktext");
+}
+
 function collapse() {
   clearTimeout(closeTimer);
+  // A sentence in progress outranks the pointer having wandered off.
+  if (typingInBox()) return;
   // Short delay so the panel does not snap shut when the pointer crosses the
   // gap between the cover and the controls.
   closeTimer = setTimeout(() => {
+    if (typingInBox()) return;
     // Two stages: the content fades here, the window shrinks after it. The
     // shrink itself is eased on the Python side, which is the only place
     // that can move an OS window.
@@ -1119,8 +1250,8 @@ function collapse() {
   }, 250);
 }
 
-document.body.addEventListener("mouseenter", expand);
-document.body.addEventListener("mouseleave", collapse);
+document.body.addEventListener("mouseenter", () => { hovering = true; expand(); });
+document.body.addEventListener("mouseleave", () => { hovering = false; collapse(); });
 
 // ------------------------------------------------------------------ actions
 
@@ -1194,8 +1325,35 @@ el("chip").addEventListener("click", (e) => {
   fitWindow();
 });
 
-el("steer").addEventListener("click", (e) => {
+el("asktext").addEventListener("keydown", (e) => {
   e.stopPropagation();
+  if (e.key === "Enter") {
+    const text = el("asktext").value.trim();
+    // An empty box and Enter means "forget it", not "act on nothing".
+    send(text ? {action: "steer", text: text} : {action: "clearSteer"});
+    lastHeard = text;
+    el("asktext").blur();
+  } else if (e.key === "Escape") {
+    el("asktext").value = "";
+    send({action: "clearSteer"});
+    el("asktext").blur();
+  }
+});
+
+el("asktext").addEventListener("input", () => {
+  el("ask").classList.toggle("has-text", !!el("asktext").value);
+});
+
+// The panel shuts on mouseleave. Without this it would close over a sentence
+// you were halfway through typing, taking the box with it.
+el("asktext").addEventListener("focus", () => clearTimeout(closeTimer));
+el("asktext").addEventListener("blur", () => { if (!hovering) collapse(); });
+
+el("askclear").addEventListener("click", (e) => {
+  e.stopPropagation();
+  el("asktext").value = "";
+  lastHeard = "";
+  el("ask").classList.remove("has-text");
   send({action: "clearSteer"});
 });
 

@@ -28,6 +28,9 @@ DUCK_TIMEOUT = 5        # a volume change that takes longer has bigger problems
 # stretch of work that prompted it, short enough that this morning's "something
 # calmer" is not still deciding what plays this afternoon.
 STEER_TTL = 20 * 60
+# Longer than anyone says in fifteen seconds, short enough that a paste into
+# the box cannot crowd out the taste profile in Claude's prompt.
+STEER_MAX = 300
 
 
 class DJ:
@@ -167,9 +170,25 @@ class DJ:
 
     def push(self):
         state = self.ui_state()
+        self._to_ui(state)
+
+    def push_level(self, level):
+        """How loud the microphone is right now, and nothing else.
+
+        Its own message rather than a field on the state: this arrives a
+        dozen times a second while you hold the key, and a full push would
+        redraw the whole overlay and re-measure the window each time.
+        """
+        try:
+            level = max(0.0, min(1.0, float(level)))
+        except (TypeError, ValueError):
+            return
+        self._to_ui({"type": "level", "value": level})
+
+    def _to_ui(self, payload):
         for fn in list(self.listeners):
             try:
-                fn(state)
+                fn(payload)
             except Exception:
                 log.debug("ui listener failed", exc_info=True)
 
@@ -604,7 +623,11 @@ class DJ:
 
     async def on_steer(self, text):
         """They said something. Act on it now, not at the next refill."""
-        text = (text or "").strip()
+        # Whisper is capped by the 15-second clip, but the box takes a paste,
+        # and the whole sentence goes into Claude's prompt beside the taste
+        # profile. Trim rather than refuse: the front of what they asked for
+        # is still what they asked for.
+        text = (text or "").strip()[:STEER_MAX]
         if not text:
             # Whisper heard a cough. Advancing the track on that would be the
             # most irritating bug this feature could have.

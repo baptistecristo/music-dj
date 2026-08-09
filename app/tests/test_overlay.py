@@ -143,10 +143,11 @@ def test_alpha_changes_are_a_no_op_without_a_window_handle(monkeypatch):
 
 
 def test_the_page_shows_what_it_heard_you_say():
-    # Picking takes seventeen seconds. Without the chip, holding the key
-    # looks like it did nothing at all.
+    # Picking takes seventeen seconds. Without this, holding the key looks
+    # like it did nothing at all. It is an input now rather than a chip, so
+    # a transcript that came back wrong can be corrected instead of redone.
     body = page()
-    assert 'id="steer"' in body
+    assert 'id="asktext"' in body
     assert "state.steer" in body
 
 
@@ -162,9 +163,41 @@ def test_the_page_shows_when_the_microphone_is_open():
     assert re.search(r"body\.listening\s+#art", body)
 
 
-def test_an_empty_steer_takes_up_no_room():
-    # Same rule the notice follows: nothing to say, nothing on screen.
-    assert "#steer:empty" in page()
+def test_the_box_is_there_before_you_have_said_anything():
+    # This used to hide itself when empty, the same rule the notice follows.
+    # It stays now: a hotkey that will not fire, a package that will not load
+    # and a microphone that hears nothing all still leave you a way to steer.
+    body = page()
+    assert 'placeholder="ask for something"' in body
+    assert "#asktext:empty" not in body and "#ask:empty" not in body
+
+
+def test_the_box_does_not_close_under_you_while_you_type():
+    # The panel shuts on mouseleave. Focus has to outrank that, or moving the
+    # mouse mid-sentence takes the window and the sentence with it.
+    body = page()
+    collapse = body.split("function collapse()", 1)[1].split("function ", 1)[0]
+    assert "typingInBox()" in collapse
+
+
+def test_a_transcript_never_overwrites_what_you_are_typing():
+    body = page()
+    assert "document.activeElement !== box" in body
+
+
+def test_the_meter_falls_back_to_zero_if_the_daemon_goes_quiet():
+    # The daemon sends a zero when the key comes up. One that dies mid-
+    # sentence sends nothing, and a bar frozen half full reads as listening.
+    body = page()
+    assert "levelAt" in body and "> 500" in body
+
+
+def test_the_mic_badge_is_drawn_not_typed():
+    # The transport icons were a Windows-only font once and came out as empty
+    # boxes on macOS and Linux.
+    body = page()
+    mic = body.split('id="mic"', 1)[1].split("</div>", 1)[0]
+    assert "<svg" in mic
 
 
 # ------------------------------------------------- settling back to collapsed
