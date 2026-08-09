@@ -175,8 +175,17 @@ class DJ:
 
     # ---------------------------------------------------------------- moods
 
-    async def set_mood(self, mood, *, pinned=None, force=False):
-        """Change mood and rebuild the queue. No-op if nothing changed."""
+    async def set_mood(self, mood, *, pinned=None, force=False,
+                       wait_for_queue=True):
+        """Change mood and rebuild the queue. No-op if nothing changed.
+
+        wait_for_queue=False returns as soon as the change is visible and
+        leaves the rebuild running behind it. The overlay's socket reads one
+        action, awaits it, then reads the next, so a click that waits for a
+        picker run plus a search per track leaves every later click unread --
+        86 seconds of it, in the worst case seen. The mood watcher has nobody
+        waiting on it and still waits.
+        """
         if pinned is not None:
             self.pinned = pinned
         if mood == self.mood and not force:
@@ -196,16 +205,29 @@ class DJ:
         if self.current and not (self.is_urgent(mood) and not force):
             self.notice = "%s from the next song" % mood
             self.push()          # the click has an answer before the searching
-            await self.refill()
-            log.info("queued %s for the next track; letting this one finish",
-                     self.lane)
-            self.push()
+            await self._run(self._queue_behind_this_track(), wait_for_queue)
             return
 
         # Nothing is playing, so there is nothing to wait for -- but building a
         # lane is a picker run plus a search per track, ten or twenty seconds
         # of silence with no explanation. Say what is being built.
         await self.hush()
+        await self._run(self._build_lane_and_play(), wait_for_queue)
+
+    async def _run(self, coro, wait):
+        """Await the rest of the work, or leave it running behind the answer."""
+        if wait:
+            await coro
+        else:
+            self._spawn(coro)
+
+    async def _queue_behind_this_track(self):
+        await self.refill()
+        log.info("queued %s for the next track; letting this one finish",
+                 self.lane)
+        self.push()
+
+    async def _build_lane_and_play(self):
         try:
             await self.refill()
         finally:
@@ -811,13 +833,14 @@ class DJ:
 
         elif action == "setMood":
             await self.set_mood(msg.get("mood"),
-                                pinned=bool(msg.get("pinned", True)), force=True)
+                                pinned=bool(msg.get("pinned", True)), force=True,
+                                wait_for_queue=False)
 
         elif action == "unpin":
             self.pinned = False
             mood = (store.read_json(store.STATE, {}) or {}).get("current_mood")
             if mood:
-                await self.set_mood(mood)
+                await self.set_mood(mood, wait_for_queue=False)
             else:
                 self.push()
 
