@@ -153,6 +153,11 @@
   }
 
   body.open .panel { opacity: 1; pointer-events: auto; }
+
+  /* On the way out the content fades before the window moves. Dropping
+     .open and resizing in the same frame made the panel vanish and the
+     window snap as one jolt. */
+  body.open.closing .panel { opacity: 0; transition: opacity 120ms ease; }
   /* Qualified by #shell so this outranks the id selectors below that set
      display on individual rows -- otherwise the scrubber and the controls
      would sit on top of the collapsed album art. */
@@ -1084,6 +1089,9 @@ function send(msg) {
 // driven together: window first so there is room, then the content fades in.
 function expand() {
   clearTimeout(closeTimer);
+  // A fade-out may be part way through; take the content back to full ink
+  // rather than letting it finish disappearing under the pointer.
+  document.body.classList.remove("closing");
   if (open) return;
   open = true;
   lastFit = 0;
@@ -1097,11 +1105,17 @@ function collapse() {
   // Short delay so the panel does not snap shut when the pointer crosses the
   // gap between the cover and the controls.
   closeTimer = setTimeout(() => {
-    open = false;
-    el("moods").classList.remove("show");
-    document.body.classList.remove("open");
-    if (window.pywebview) pywebview.api.collapse();
-    syncVeil();             // paused and no longer hovered: free to go
+    // Two stages: the content fades here, the window shrinks after it. The
+    // shrink itself is eased on the Python side, which is the only place
+    // that can move an OS window.
+    document.body.classList.add("closing");
+    closeTimer = setTimeout(() => {
+      open = false;
+      el("moods").classList.remove("show");
+      document.body.classList.remove("open", "closing");
+      if (window.pywebview) pywebview.api.collapse();
+      syncVeil();           // paused and no longer hovered: free to go
+    }, 120);
   }, 250);
 }
 

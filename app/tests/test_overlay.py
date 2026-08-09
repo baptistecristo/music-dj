@@ -165,3 +165,40 @@ def test_the_page_shows_when_the_microphone_is_open():
 def test_an_empty_steer_takes_up_no_room():
     # Same rule the notice follows: nothing to say, nothing on screen.
     assert "#steer:empty" in page()
+
+
+# ------------------------------------------------- settling back to collapsed
+
+def test_the_window_eases_shut_rather_than_snapping():
+    # The alpha already faded on the way out; the geometry jumped in one
+    # SetWindowPos, which is the jolt you feel when the pointer leaves.
+    body = source()
+    assert "def slide_size(" in body
+    collapse = body.split("def collapse(self):", 1)[1].split("def ", 1)[0]
+    assert "slide_size(" in collapse, "collapse must ease, not snap"
+    assert "set_size(*COLLAPSED)" in collapse, (
+        "keep the plain resize as the fallback for a window we cannot measure")
+
+
+def test_opening_abandons_a_shrink_still_in_flight():
+    # Come back to the cover mid-collapse and the shrink would keep stepping
+    # the window down on its thread, fighting the expand and winning.
+    body = source()
+    expand = body.split("def expand(self, height=None):", 1)[1].split("def ", 1)[0]
+    assert "_size_gen[0] += 1" in expand
+
+
+def test_the_panel_fades_before_the_window_moves():
+    body = page()
+    assert "body.open.closing .panel" in body, "no fade-out state on the panel"
+    closing = body.index('classList.add("closing")')
+    shrink = body.index("pywebview.api.collapse()")
+    assert closing < shrink, "the content has to be gone before the window moves"
+
+
+def test_coming_back_cancels_the_fade_out():
+    # Cross back over the cover during the fade and the panel must return to
+    # full ink rather than finishing its disappearance under the pointer.
+    body = page()
+    expand = body.split("function expand()", 1)[1].split("function ", 1)[0]
+    assert 'classList.remove("closing")' in expand

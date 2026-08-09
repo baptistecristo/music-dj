@@ -74,6 +74,9 @@ class Api:
         # so the panel hugs what is on it -- no slack band above or below.
         h = int(height) if height else EXPANDED[1]
         h = max(110, min(430, h))
+        # A shrink may still be running from a collapse the pointer changed
+        # its mind about; abandon it or it would fight this and win.
+        _size_gen[0] += 1
         if not set_size(EXPANDED[0], h):
             win = self._window()
             if win:
@@ -84,7 +87,9 @@ class Api:
         set_alpha(ACTIVE_ALPHA)
 
     def collapse(self):
-        if not set_size(*COLLAPSED):
+        # Eased rather than snapped: going out is the one direction where a
+        # little travel reads as settling instead of lag.
+        if not slide_size(*COLLAPSED) and not set_size(*COLLAPSED):
             win = self._window()
             if win:
                 win.resize(*COLLAPSED)
@@ -470,6 +475,60 @@ def fade_alpha(target, duration=0.15, floor=40):
             time.sleep(duration / steps)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+_size_gen = [0]                 # bumping this abandons any slide in flight
+
+
+def current_size():
+    """The window's size in the same logical pixels set_size takes."""
+    if not _hwnd:
+        return None
+    try:
+        import ctypes.wintypes          # raises off Windows; never at import
+        rect = ctypes.wintypes.RECT()
+        if not ctypes.windll.user32.GetWindowRect(_hwnd, ctypes.byref(rect)):
+            return None
+        try:
+            scale = (ctypes.windll.user32.GetDpiForWindow(_hwnd) or 96) / 96.0
+        except Exception:
+            scale = 1.0
+        return ((rect.right - rect.left) / scale,
+                (rect.bottom - rect.top) / scale)
+    except Exception:
+        return None
+
+
+def slide_size(width, height, duration=0.16):
+    """Ease the window down to a size instead of jumping to it.
+
+    Same reason fade_alpha exists: CSS cannot animate a frameless OS window,
+    so the easing lives on this side. Only the way out is eased -- expand()
+    stays instant, because waiting for the panel to grow reads as lag.
+    """
+    start = current_size()
+    if start is None:
+        return False
+    _size_gen[0] += 1
+    gen = _size_gen[0]
+
+    def run():
+        steps = 10
+        for i in range(1, steps + 1):
+            if _size_gen[0] != gen:
+                return
+            # Ease out: most of the travel happens early, so the window looks
+            # like it is settling rather than braking.
+            t = i / steps
+            e = 1 - (1 - t) * (1 - t)
+            set_size(round(start[0] + (width - start[0]) * e),
+                     round(start[1] + (height - start[1]) * e))
+            time.sleep(duration / steps)
+        if _size_gen[0] == gen:
+            set_size(width, height)     # land exactly, whatever rounding did
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
 
 
 def vanish():
