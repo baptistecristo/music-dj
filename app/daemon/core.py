@@ -461,6 +461,12 @@ class DJ:
         # Refill ahead of time so the next advance never waits on a search.
         if library.needs_refill(self.queue):
             self._spawn(self.refill())
+
+        # And fetch the lyrics before they are asked for. On the button they
+        # cost the overlay, the daemon, the page and Apple in series, which is
+        # a beat longer than pressing a button should take. Here nobody is
+        # waiting, and the press becomes a cache read.
+        self._spawn(self.fetch_lyrics(quiet=True))
         return track
 
     async def reseed(self):
@@ -562,6 +568,16 @@ class DJ:
 
     def set_listening(self, flag):
         self.listening = bool(flag)
+        self.push()
+
+    def heard_nothing(self):
+        """Say that the microphone caught nothing usable.
+
+        Silence here is the worst answer available: a press that changes no
+        music and shows no message reads as a key that never worked, and you
+        cannot tell that apart from a broken hotkey without reading the log.
+        """
+        self.notice = "didn't catch that"
         self.push()
 
     async def on_steer(self, text):
@@ -905,8 +921,12 @@ class DJ:
         except Exception:
             log.debug("library refresh failed", exc_info=True)
 
-    async def fetch_lyrics(self):
-        """Fetch and cache lyrics for the current track, once."""
+    async def fetch_lyrics(self, quiet=False):
+        """Fetch and cache lyrics for the current track, once.
+
+        `quiet` is the prefetch: nobody asked, so a page that cannot answer
+        must not put a notice on screen about a button they never pressed.
+        """
         track = self.current
         if not track or not track.get("catalogId"):
             return
@@ -920,8 +940,9 @@ class DJ:
             # An old page script answers "unknown command". That is not the
             # same as the song having no lyrics -- say what would fix it and
             # leave the cache empty so a later try can succeed.
-            self.notice = "lyrics need a reloaded DJ tab"
-            self.push()
+            if not quiet:
+                self.notice = "lyrics need a reloaded DJ tab"
+                self.push()
             return
         # The reply may arrive after the song has already moved on.
         if self.current and self.current.get("catalogId") == cid:

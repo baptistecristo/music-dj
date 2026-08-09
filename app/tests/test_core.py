@@ -42,6 +42,7 @@ class FakeTransport:
         self.playlists = []
         self.fail_list = False
         self.ttml = None
+        self.fail_lyrics = False
         self.additions = []
         self.counter = 0
         self.volume = 1.0
@@ -77,6 +78,8 @@ class FakeTransport:
                 return {"error": "no tab"}
             return {"playlists": list(self.playlists)}
         if kind == "lyrics":
+            if self.fail_lyrics:
+                return {"error": "unknown command"}
             return {"ttml": self.ttml}
         if kind == "recentlyAdded":
             return {"items": list(self.additions)}
@@ -1703,3 +1706,51 @@ async def test_listening_shows_in_the_ui():
     dj = make_dj()
     dj.set_listening(True)
     assert dj.ui_state()["listening"] is True
+
+
+# ------------------------------------------------------------------- lyrics
+
+
+@pytest.mark.asyncio
+async def test_lyrics_are_fetched_before_the_button_is_pressed():
+    # On the button they cost four hops in series. Prefetched, the press is a
+    # cache read.
+    dj = make_dj()
+    dj.tx.ttml = "<tt>la la</tt>"
+    await dj.play_next()
+    await asyncio.sleep(0)
+    assert dj.lyrics is not None
+    assert dj.lyrics["catalogId"] == dj.current["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_pressing_lyrics_after_a_prefetch_asks_the_page_once():
+    dj = make_dj()
+    dj.tx.ttml = "<tt>la la</tt>"
+    await dj.play_next()
+    await asyncio.sleep(0)
+    before = len([c for c in dj.tx.calls if c.get("cmd") == "lyrics"])
+    await dj.on_action({"action": "lyrics"})
+    after = len([c for c in dj.tx.calls if c.get("cmd") == "lyrics"])
+    assert before == 1 and after == 1
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_that_fails_says_nothing():
+    # Nobody pressed anything, so a page that cannot answer must not put a
+    # notice on screen about a button they never touched.
+    dj = make_dj()
+    dj.tx.fail_lyrics = True
+    await dj.play_next()
+    await asyncio.sleep(0)
+    assert dj.notice is None
+
+
+@pytest.mark.asyncio
+async def test_pressing_lyrics_still_reports_a_page_that_cannot_answer():
+    dj = make_dj()
+    dj.tx.fail_lyrics = True
+    await dj.play_next()
+    await asyncio.sleep(0)
+    await dj.on_action({"action": "lyrics"})
+    assert dj.notice == "lyrics need a reloaded DJ tab"

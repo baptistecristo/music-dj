@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import threading
+import time
 
 import pytest
 
@@ -175,6 +176,9 @@ class FakeDJ:
 
     def set_listening(self, flag):
         self.listening.append(bool(flag))
+
+    def heard_nothing(self):
+        self.missed = getattr(self, "missed", 0) + 1
 
 
 async def settle():
@@ -365,6 +369,51 @@ def test_voice_stays_off_without_the_packages(monkeypatch):
 def test_voice_stays_off_when_it_is_switched_off(monkeypatch):
     monkeypatch.setattr(voice.listen, "available", lambda: True)
     assert voice.start(FakeDJ(), None, {"voice": {"enabled": False}}) is None
+
+
+@pytest.mark.asyncio
+async def test_the_pulse_stops_when_the_key_comes_up():
+    # Not when transcription finishes a second or two later. The overlay was
+    # still saying "listening" after you had let go, which is the one thing
+    # the indicator exists to tell you.
+    started = asyncio.Event()
+
+    def slow(audio):
+        started.set()
+        time.sleep(0.3)
+        return "plus calme"
+
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=slow)
+    v.pressed()
+    await asyncio.sleep(0)
+    v.released()
+    await asyncio.sleep(0)
+    assert dj.listening == [True, False]      # already false, mid-transcription
+    assert v.busy                             # and the cycle is still running
+    while v.busy:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_hearing_nothing_says_so():
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=lambda audio: "")
+    await hold_and_release(v)
+    assert dj.steers == []
+    assert getattr(dj, "missed", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_hearing_something_says_nothing_extra():
+    dj = FakeDJ()
+    v = voice.Voice(dj, asyncio.get_running_loop(), recorder=FakeRecorder(),
+                    transcriber=lambda audio: "plus calme")
+    await hold_and_release(v)
+    assert dj.steers == ["plus calme"]
+    assert getattr(dj, "missed", 0) == 0
 
 
 def test_a_package_that_is_not_installed_says_so(monkeypatch):

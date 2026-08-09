@@ -202,12 +202,53 @@ class Transcriber:
         return text if usable(text, prob, self.no_speech) else ""
 
 
+def check(seconds=5, model=DEFAULT_MODEL):
+    """Record, transcribe, and say what came back.
+
+    The daemon runs without a console, so a press that produces nothing
+    leaves no way to tell a dead microphone from a dead hotkey. This is the
+    same recorder and the same model, with the answer printed.
+    """
+    import time
+    recorder = Recorder()
+    print("Speak now -- %d seconds. Say something like "
+          '"un truc plus calme".' % seconds)
+    recorder.start()
+    time.sleep(seconds)
+    audio = recorder.stop()
+    if audio is None or not len(audio):
+        print("\nThe microphone returned nothing at all.")
+        print("Check the input device in Windows sound settings.")
+        return 1
+
+    peak = float(max(abs(float(s)) for s in audio[::16]) if len(audio) else 0.0)
+    print("\nCaptured %.1fs, loudest sample %.4f" % (len(audio) / SAMPLE_RATE, peak))
+    # Not a hard failure: Whisper reads quieter audio than this than you would
+    # expect, so the number is a hint, and the transcript below is the verdict.
+    if peak < 0.005:
+        print("That is very quiet -- near the noise floor of a silent room.")
+
+    text = Transcriber(model=model)(audio)
+    if text:
+        print("Heard: %r" % text)
+        print("\nThe microphone and the model both work.")
+        return 0
+    print("Heard nothing usable.")
+    print("If the level above was near silence, the microphone is the problem,")
+    print("not the DJ: check that the right input device is the default one")
+    print("and that it is not muted.")
+    return 1
+
+
 def main():
     """python -m daemon.listen --warm: pull the model down, once."""
     import argparse
     parser = argparse.ArgumentParser(prog="music-dj listen")
     parser.add_argument("--warm", action="store_true",
                         help="download and load the model, then exit")
+    parser.add_argument("--check", action="store_true",
+                        help="record from the microphone and print what it heard")
+    parser.add_argument("--seconds", type=int, default=5)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -220,6 +261,8 @@ def main():
     print("Loading %s. The first run downloads about 500MB." % args.model)
     if Transcriber(model=args.model).warm() is None:
         raise SystemExit(1)
+    if args.check:
+        raise SystemExit(check(seconds=args.seconds, model=args.model))
     print("Ready. Hold Alt+J and talk to the DJ.")
 
 

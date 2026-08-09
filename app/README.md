@@ -105,6 +105,14 @@ python -m pip install -r requirements-voice.txt
 python -m daemon.listen --warm      # ~500MB, once
 ```
 
+If a press seems to do nothing, the overlay says "didn't catch that" when the
+microphone caught nothing usable. To tell a dead microphone from a dead hotkey,
+run the same recorder and the same model with the answer printed:
+
+```
+python -m daemon.listen --check
+```
+
 Alt+J rather than a chord: `RegisterHotKey` takes modifiers plus one key, and
 Windows swallows the combo before any application sees it. Alt+D+J would need a
 low-level hook and would send a real Alt+D to whatever you were looking at on

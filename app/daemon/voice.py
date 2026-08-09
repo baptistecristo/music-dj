@@ -73,6 +73,10 @@ class Voice:
             # a recording nobody made.
             return
         self.recording = False
+        # The pulse stops when the key comes up, not a second or two later
+        # when transcription finishes. Clearing it in _finish meant the
+        # overlay went on saying the microphone was open after you let go.
+        self.dj.set_listening(False)
         self._spawn(self._finish())
 
     async def _finish(self):
@@ -93,11 +97,14 @@ class Voice:
             # Whatever happened above, the music comes back. Leaving it at
             # 15% reads as a mixing problem for the rest of the session and
             # nobody would connect it to having spoken.
-            self.dj.set_listening(False)
             await self.dj.unduck()
             self.busy = False
         if text:
             await self.dj.on_steer(text)
+        else:
+            # A press that changes nothing and says nothing is indistinguishable
+            # from a key that never worked, which is exactly how it was read.
+            self.dj.heard_nothing()
 
     def _spawn(self, coro):
         task = asyncio.ensure_future(coro)

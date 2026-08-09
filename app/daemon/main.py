@@ -20,6 +20,11 @@ def setup_logging(verbose):
     # update every second, so --verbose otherwise buries our own lines under
     # protocol chatter.
     logging.getLogger("websockets").setLevel(logging.WARNING)
+    # Warming Whisper asks huggingface for the model revision, and httpx logs
+    # every header of it. Left alone, --verbose is one screen of our lines and
+    # a hundred of somebody else's TLS handshake.
+    for noisy in ("httpx", "httpcore", "huggingface_hub", "filelock"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 async def run(args):
