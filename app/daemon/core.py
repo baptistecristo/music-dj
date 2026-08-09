@@ -23,6 +23,11 @@ PLAY_ATTEMPTS = 3       # dead tracks to walk past before giving up on a cycle
 # Press "previous" further in than this and it restarts the song instead of
 # leaving it. Under it you are still at the top, so you meant the one before.
 RESTART_BEFORE_MS = 3000
+DUCK_TIMEOUT = 5        # a volume change that takes longer has bigger problems
+# How long a spoken request keeps shaping the picks. Long enough to cover the
+# stretch of work that prompted it, short enough that this morning's "something
+# calmer" is not still deciding what plays this afternoon.
+STEER_TTL = 20 * 60
 
 
 class DJ:
@@ -58,6 +63,10 @@ class DJ:
         self.previews_only = False
         self.autoplay_blocked = False
         self.playing = False
+        # The level to put back after ducking, or None when we have not ducked.
+        self._volume_before = None
+        self.steer = None            # {"text", "at"}: the last thing they said
+        self.listening = False       # the key is down and the mic is open
         self.listeners = []          # UI push callbacks
         self._tasks = set()          # strong refs to fire-and-forget tasks
         # catalogId of a track whose play command is still awaiting its reply.
@@ -151,6 +160,9 @@ class DJ:
             "preparing": self.preparing,
             "setup": self.setup,
             "lyrics": self.lyrics,
+            # What they last asked for out loud, and whether the mic is open.
+            "steer": self.steer_text(),
+            "listening": self.listening,
         }
 
     def push(self):
@@ -250,6 +262,7 @@ class DJ:
         async with self._refill_lock:
             self.refresh_seeds()
             mood, lane = self.mood, self.lane
+            said = self.steer_text()
             # The Claude picker shells out and can sit there for 15s. Run it
             # off the event loop or playback events queue up behind it and the
             # music stutters between tracks.
@@ -263,6 +276,22 @@ class DJ:
                 # Resolving took long enough for the mood to move on. Writing
                 # this batch would label the new queue with the old mood.
                 log.info("dropping stale refill for %s/%s", mood, lane)
+                return
+
+            now_said = self.steer_text()
+            if now_said is not None and now_said != said:
+                # They spoke while this was in flight. on_steer already
+                # emptied the queue, so writing these picks would fill it
+                # with songs chosen before they said anything -- and the
+                # first of them is what play_next reaches for. The newer
+                # steer has its own refill queued behind this lock.
+                #
+                # Only when there IS a newer steer. A steer that expired or
+                # was cleared mid-refill also changes this value, and dropping
+                # the batch then leaves the queue empty with nobody about to
+                # refill it: twenty seconds of silence until start_when_ready
+                # notices. Nobody asked for different music, so keep it.
+                log.info("dropping a refill the steer overtook")
                 return
 
             resolved = library.dedupe_picks(
@@ -432,6 +461,12 @@ class DJ:
         # Refill ahead of time so the next advance never waits on a search.
         if library.needs_refill(self.queue):
             self._spawn(self.refill())
+
+        # And fetch the lyrics before they are asked for. On the button they
+        # cost the overlay, the daemon, the page and Apple in series, which is
+        # a beat longer than pressing a button should take. Here nobody is
+        # waiting, and the press becomes a cache read.
+        self._spawn(self.fetch_lyrics(quiet=True))
         return track
 
     async def reseed(self):
@@ -494,6 +529,79 @@ class DJ:
         self.queue = dict(self.queue or {},
                           tracks=[track] + library.queue_tracks(self.queue))
         store.write_json(store.QUEUE, self.queue)
+        await self.play_next()
+
+    # --------------------------------------------------------------- volume
+
+    async def duck(self, level):
+        """Turn the music down while they talk, remembering where it was."""
+        reply = await self.tx.call({"cmd": "volume", "level": level},
+                                   timeout=DUCK_TIMEOUT)
+        if not isinstance(reply, dict) or reply.get("error"):
+            # No tab, or an old page script that does not know the command.
+            # Talking over the music is worse than silence but it still works.
+            return
+        previous = reply.get("previous")
+        # Only the first duck of a press records anything. Record it twice and
+        # the second one saves 0.15, so the music comes back at a whisper and
+        # stays there for the rest of the session.
+        if self._volume_before is None and isinstance(previous, (int, float)):
+            self._volume_before = float(previous)
+
+    async def unduck(self):
+        """Put the volume back where it was, if we moved it."""
+        level = self._volume_before
+        self._volume_before = None
+        if level is None:
+            return
+        await self.tx.call({"cmd": "volume", "level": level},
+                           timeout=DUCK_TIMEOUT)
+
+    def steer_text(self):
+        """What they last asked for out loud, or None once it has gone stale."""
+        if not self.steer:
+            return None
+        if self.now() - self.steer["at"] > STEER_TTL:
+            self.steer = None
+            return None
+        return self.steer["text"]
+
+    def set_listening(self, flag):
+        self.listening = bool(flag)
+        self.push()
+
+    def heard_nothing(self):
+        """Say that the microphone caught nothing usable.
+
+        Silence here is the worst answer available: a press that changes no
+        music and shows no message reads as a key that never worked, and you
+        cannot tell that apart from a broken hotkey without reading the log.
+        """
+        self.notice = "didn't catch that"
+        self.push()
+
+    async def on_steer(self, text):
+        """They said something. Act on it now, not at the next refill."""
+        text = (text or "").strip()
+        if not text:
+            # Whisper heard a cough. Advancing the track on that would be the
+            # most irritating bug this feature could have.
+            return
+        self.steer = {"text": text, "at": self.now()}
+        # The length, not the sentence. start.sh appends this log to
+        # $TMPDIR/music-dj.log, which outlives the process, and what they said
+        # is supposed to be gone at the next restart.
+        log.info("steer heard (%d chars)", len(text))
+        # The chip lands before the seventeen seconds of picking, so holding
+        # the key has a visible answer straight away.
+        self.push()
+        # Everything queued behind this was chosen before they spoke.
+        self.queue = library.make_queue([], self.mood, self.lane, "profile",
+                                        self.now())
+        await self.refill()
+        # play_next rather than on_action's skip branch, which records a
+        # signal against the outgoing track. They passed judgement on the
+        # register, not on the song that happened to be playing.
         await self.play_next()
 
     # --------------------------------------------------------------- events
@@ -724,6 +832,13 @@ class DJ:
             self.notice = None
             self.push()
 
+        elif action == "steer":
+            await self.on_steer(msg.get("text"))
+
+        elif action == "clearSteer":
+            self.steer = None
+            self.push()
+
     async def rate(self, stars):
         if not self.current:
             return
@@ -806,8 +921,12 @@ class DJ:
         except Exception:
             log.debug("library refresh failed", exc_info=True)
 
-    async def fetch_lyrics(self):
-        """Fetch and cache lyrics for the current track, once."""
+    async def fetch_lyrics(self, quiet=False):
+        """Fetch and cache lyrics for the current track, once.
+
+        `quiet` is the prefetch: nobody asked, so a page that cannot answer
+        must not put a notice on screen about a button they never pressed.
+        """
         track = self.current
         if not track or not track.get("catalogId"):
             return
@@ -821,8 +940,9 @@ class DJ:
             # An old page script answers "unknown command". That is not the
             # same as the song having no lyrics -- say what would fix it and
             # leave the cache empty so a later try can succeed.
-            self.notice = "lyrics need a reloaded DJ tab"
-            self.push()
+            if not quiet:
+                self.notice = "lyrics need a reloaded DJ tab"
+                self.push()
             return
         # The reply may arrive after the song has already moved on.
         if self.current and self.current.get("catalogId") == cid:

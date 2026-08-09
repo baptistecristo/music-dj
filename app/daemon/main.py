@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import logging
 
-from . import advisor, core, server, store
+from . import advisor, core, server, store, voice
 
 
 def setup_logging(verbose):
@@ -20,6 +20,11 @@ def setup_logging(verbose):
     # update every second, so --verbose otherwise buries our own lines under
     # protocol chatter.
     logging.getLogger("websockets").setLevel(logging.WARNING)
+    # Warming Whisper asks huggingface for the model revision, and httpx logs
+    # every header of it. Left alone, --verbose is one screen of our lines and
+    # a hundred of somebody else's TLS handshake.
+    for noisy in ("httpx", "httpcore", "huggingface_hub", "filelock"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 async def run(args):
@@ -31,8 +36,20 @@ async def run(args):
         # Claude picks the batch; the profile stays underneath as the fallback
         # whenever the CLI is missing, slow, or unhelpful.
         dj.picks_for = lambda mood, lane: advisor.picks_for(
-            mood, lane, seeds=dj.seeds, rng=dj.rng)
+            mood, lane, seeds=dj.seeds, rng=dj.rng, steer=dj.steer_text())
+    else:
+        # The profile picker takes no steer, so without Claude the key still
+        # ducks the music, moves the track and shows the chip -- and changes
+        # nothing about what plays. Say so, rather than let it look broken.
+        logging.getLogger("music-dj").info(
+            "--no-claude: the profile picks on its own, so talking to the DJ "
+            "changes nothing")
     transport.on_event = dj.on_event
+
+    # Optional and best-effort: a missing package, an unavailable microphone
+    # or a key another program already holds all end the same way, with the
+    # daemon running exactly as it did before.
+    key = voice.start(dj, asyncio.get_running_loop(), config)
 
     srv = server.Server(dj, transport, port=args.port)
     logging.getLogger("music-dj").info(
@@ -58,6 +75,8 @@ async def run(args):
     # The shutdown broadcast to the overlay rides on tasks created just
     # before the event was set; give them a beat to flush.
     await asyncio.sleep(0.2)
+    if key is not None:
+        key.stop()
     logging.getLogger("music-dj").info("daemon stopped")
     if failed:
         raise SystemExit(1)

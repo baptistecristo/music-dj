@@ -91,6 +91,55 @@ system's blur, hidden and shown rather than faded. `overlay/app.py` returns
 early from every Win32 call off Windows; the callers all had a fallback
 already, because those calls can fail on the wrong Windows build too.
 
+**Talk to it.** Hold Alt+J, say what you want in French, let go. The music
+ducks to 15% while you speak, Whisper turns the clip into text on your machine,
+and the sentence goes into Claude's next prompt whole -- so nothing here parses
+French. The queue is rebuilt on the spot and the current track goes with it.
+What you said sits in the overlay as a chip for twenty minutes; click it to
+forget it.
+
+Voice is off until you install it:
+
+```
+python -m pip install -r requirements-voice.txt
+python -m daemon.listen --warm      # ~500MB, once
+```
+
+If a press seems to do nothing, the overlay says "didn't catch that" when the
+microphone caught nothing usable. To tell a dead microphone from a dead hotkey,
+run the same recorder and the same model with the answer printed:
+
+```
+python -m daemon.listen --check
+```
+
+Alt+J rather than a chord: `RegisterHotKey` takes modifiers plus one key, and
+Windows swallows the combo before any application sees it. Alt+D+J would need a
+low-level hook and would send a real Alt+D to whatever you were looking at on
+the way to the J. Set `voice.hotkey` in `config.json` if something else already
+holds it. That key and the rest of the `voice` block:
+
+| key | default | what it does |
+|---|---|---|
+| `enabled` | `true` | `false` turns voice off without uninstalling anything |
+| `hotkey` | `alt+j` | modifiers plus one key, e.g. `ctrl+shift+j` |
+| `model` | `small` | Whisper model. `base` mishears French, `medium` is four times slower |
+| `language` | `fr` | pinned, not detected |
+| `duck_level` | `0.15` | where the music sits while you talk |
+| `no_speech_threshold` | `0.6` | above this, the clip is treated as a cough and ignored |
+
+The key is verified on Windows. Linux needs X11, macOS needs this app ticked
+under Privacy & Security > Accessibility, and nobody has sat down in front of
+either with this, which is worth knowing before you rely on it. Everything
+outside voice works either way.
+
+macOS answers twice about a key: the character the layout printed, and the
+position of the key that printed it. Option+J prints `∆`, so a hotkey read
+from the character alone could never fire there. The DJ takes both answers and
+Alt+J matches on the position. Tests cover that and nothing else does. The
+position is a US board's, so on a layout that moves the letters about, set
+`voice.hotkey` to the key sitting where J sits there.
+
 **Previous** restarts the song. Press it again within the first few seconds
 and it goes back one — the playhead is at zero by then, so the second press
 takes the other branch without anything counting clicks.
@@ -216,6 +265,17 @@ waits on it -- the queue refills mid-track).
 
 - Content scripts do not reach a tab that was already open when the extension
   loaded. The worker injects on demand instead.
+- On an ARM64 Windows machine running x64 Python, `sounddevice` installs and
+  then refuses to load: it asks PortAudio for `libportaudioarm64.dll`, which
+  the x64 wheel it just installed does not ship. `platform.machine()` reports
+  the native ARM64 even from an emulated process, so the check picks the wrong
+  name. The x64 DLL sitting beside it is the right one for an x64 process --
+  copy it to the name being looked for, in the `_sounddevice_data\portaudio-binaries`
+  folder of your site-packages:
+
+```powershell
+Copy-Item libportaudio64bit.dll libportaudioarm64.dll
+```
 - Chrome and Edge refuse audio until the tab has had a real click, and Edge's
   "Limit" autoplay default re-blocks it.
 - Apple Music registers `beforeunload`, so reloading the DJ tab throws up a

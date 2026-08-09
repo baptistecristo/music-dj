@@ -1,0 +1,9 @@
+# Talking to the DJ. Optional: without these it runs exactly as before, minus
+# the microphone.
+#   python -m pip install -r app/requirements-voice.txt
+#   python -m daemon.listen --warm      # pulls the model down, once
+sounddevice
+faster-whisper
+# The global key off Windows. Windows uses RegisterHotKey through ctypes and
+# needs nothing here.
+pynput; sys_platform != "win32"

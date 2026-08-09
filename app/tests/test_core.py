@@ -5,9 +5,11 @@ real ~/.music-dj.
 """
 
 import asyncio
+import logging
 import os
 import random
 import sys
+import time
 
 import pytest
 
@@ -40,8 +42,11 @@ class FakeTransport:
         self.playlists = []
         self.fail_list = False
         self.ttml = None
+        self.fail_lyrics = False
         self.additions = []
         self.counter = 0
+        self.volume = 1.0
+        self.fail_volume = False
 
     async def call(self, cmd, timeout=None):
         self.calls.append(cmd)
@@ -73,9 +78,18 @@ class FakeTransport:
                 return {"error": "no tab"}
             return {"playlists": list(self.playlists)}
         if kind == "lyrics":
+            if self.fail_lyrics:
+                return {"error": "unknown command"}
             return {"ttml": self.ttml}
         if kind == "recentlyAdded":
             return {"items": list(self.additions)}
+        if kind == "volume":
+            if self.fail_volume:
+                return {"error": "no tab"}
+            before = self.volume
+            if cmd.get("level") is not None:
+                self.volume = float(cmd["level"])
+            return {"ok": True, "previous": before, "volume": self.volume}
         return {"ok": True}
 
     def sent(self, kind):
@@ -1404,3 +1418,339 @@ async def test_shutdown_when_not_playing_skips_pause():
 
     assert {"cmd": "pause"} not in tx.calls
     assert dj.shutdown_event.is_set()
+
+
+# -------------------------------------------------------------------- volume
+
+
+@pytest.mark.asyncio
+async def test_ducking_remembers_the_level_to_restore():
+    dj = make_dj()
+    dj.tx.volume = 0.8
+    await dj.duck(0.15)
+    assert dj.tx.volume == pytest.approx(0.15)
+    await dj.unduck()
+    assert dj.tx.volume == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_a_second_duck_does_not_overwrite_what_to_restore():
+    # Two ducks without a restore between them: the second must not record
+    # 0.15 as "before", or the music comes back at a whisper and stays there.
+    dj = make_dj()
+    dj.tx.volume = 0.8
+    await dj.duck(0.15)
+    await dj.duck(0.15)
+    await dj.unduck()
+    assert dj.tx.volume == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_unducking_without_a_duck_sends_nothing():
+    dj = make_dj()
+    await dj.unduck()
+    assert not [c for c in dj.tx.calls if c.get("cmd") == "volume"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_duck_records_no_level():
+    # The tab is gone. Restoring to a level we never read would be a guess.
+    dj = make_dj()
+    dj.tx.fail_volume = True
+    await dj.duck(0.15)
+    assert dj._volume_before is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_reaches_the_picker():
+    dj = make_dj()
+    seen = []
+    dj.picks_for = lambda mood, lane: seen.append(dj.steer_text()) or [
+        {"title": "T", "artist": "A"}]
+    await dj.on_steer("un truc plus calme")
+    assert seen and seen[0] == "un truc plus calme"
+
+
+@pytest.mark.asyncio
+async def test_a_steer_throws_away_the_queue_picked_before_it():
+    # Those tracks were chosen before they said anything. None of them knows
+    # about the request, so playing them out first ignores it for ten minutes.
+    dj = make_dj()
+    dj.queue = library.make_queue(
+        [{"catalogId": "old1", "title": "Old", "artist": "A"}],
+        "coding", "focus", "profile", 0)
+    await dj.on_steer("plus calme")
+    assert "old1" not in [t["catalogId"] for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_a_steer_moves_off_the_current_track():
+    dj = make_dj()
+    await dj.play_next()
+    first = dj.current["catalogId"]
+    await dj.on_steer("plus calme")
+    assert dj.current["catalogId"] != first
+
+
+@pytest.mark.asyncio
+async def test_a_steer_is_not_a_skip():
+    # Saying "something calmer" is a verdict on the register, not on whatever
+    # happened to be playing when they said it. Recording a skip here teaches
+    # the DJ they dislike an innocent song, and two of those shun it for good.
+    dj = make_dj()
+    await dj.play_next()
+    before = dict(dj.signals)
+    await dj.on_steer("plus calme")
+    assert dj.signals == before
+
+
+@pytest.mark.asyncio
+async def test_a_steer_shows_in_the_ui_before_the_picking():
+    # Picking takes seventeen seconds. The chip appearing at once is the only
+    # thing telling them the key worked.
+    dj = make_dj()
+    states = []
+    dj.subscribe(states.append)
+    dj.picks_for = lambda mood, lane: [{"title": "T", "artist": "A"}]
+    await dj.on_steer("plus calme")
+    assert states[0]["steer"] == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_a_steer_expires():
+    # make_dj pins the clock at 1000.0, so this one builds its own DJ to get
+    # a clock it can move.
+    clock = [1000.0]
+    dj = core.DJ(FakeTransport(), now=lambda: clock[0], rng=random.Random(0))
+    await dj.on_steer("plus calme")
+    clock[0] += core.STEER_TTL - 1
+    assert dj.steer_text() == "plus calme"
+    clock[0] += 2
+    assert dj.steer_text() is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_survives_a_mood_change():
+    # Asked for calmer while debugging, then started building: still calmer.
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.set_mood("building")
+    assert dj.steer_text() == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_speaking_again_replaces_the_steer():
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.on_steer("plus rapide")
+    assert dj.steer_text() == "plus rapide"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_steer_changes_nothing():
+    dj = make_dj()
+    await dj.play_next()
+    first = dj.current["catalogId"]
+    await dj.on_steer("   ")
+    assert dj.steer_text() is None
+    assert dj.current["catalogId"] == first
+
+
+@pytest.mark.asyncio
+async def test_what_they_said_never_reaches_the_log(caplog):
+    # start.sh appends the daemon's output to $TMPDIR/music-dj.log, which
+    # outlives the process. The promise is that a restart forgets what you
+    # said, and a log line spelling it out breaks that promise on disk.
+    dj = make_dj()
+    with caplog.at_level(logging.DEBUG, logger="music-dj"):
+        await dj.on_steer("un truc plus calme, moins de voix")
+    assert "moins de voix" not in caplog.text
+    assert "plus calme" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_typed_steer_is_no_more_loggable_than_a_spoken_one(caplog):
+    dj = make_dj()
+    with caplog.at_level(logging.DEBUG, logger="music-dj"):
+        await dj.on_action({"action": "steer", "text": "moins de voix"})
+    assert "moins de voix" not in caplog.text
+
+
+def watch_plays(dj):
+    """Every pick that actually reached the player, in the order it did.
+
+    Asserting on the queue at the end is not enough: a track chosen before
+    they spoke can be played and popped long before the test looks.
+    """
+    played = []
+    real = dj._play_next
+
+    async def spy():
+        out = await real()
+        if dj.current:
+            played.append(dj.current.get("why"))
+        return out
+
+    dj._play_next = spy
+    return played
+
+
+@pytest.mark.asyncio
+async def test_a_refill_in_flight_does_not_bury_a_steer():
+    # on_steer empties the queue and then waits its turn on the refill lock.
+    # The refill already in flight recomputes what to keep against the queue
+    # it just emptied and writes its pre-steer picks in, so the track that
+    # played next was chosen before they opened their mouth.
+    tx = FakeTransport()
+    tx.search_delay = 0.2
+    dj = make_dj(tx)
+    dj.picks_for = lambda mood, lane: [
+        {"title": "T", "artist": "A",
+         "why": "after" if dj.steer_text() else "before"}]
+    played = watch_plays(dj)
+
+    inflight = asyncio.create_task(dj.refill())
+    await asyncio.sleep(0.05)
+    await dj.on_steer("plus calme")
+    await inflight
+
+    assert "before" not in played, "played a track chosen before they spoke"
+    assert "before" not in [t.get("why")
+                            for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_the_second_of_two_steers_wins():
+    # Speaking twice inside the seventeen seconds one pick takes. The first
+    # steer's batch must not land on top of the second one's.
+    tx = FakeTransport()
+    dj = make_dj(tx)
+
+    def slow_picks(mood, lane):
+        said = dj.steer_text()
+        time.sleep(0.2)      # runs in the executor, like the real picker
+        return [{"title": "T", "artist": "A", "why": said}]
+
+    dj.picks_for = slow_picks
+    played = watch_plays(dj)
+    first = asyncio.create_task(dj.on_steer("plus calme"))
+    await asyncio.sleep(0.05)
+    await dj.on_steer("plus rapide")
+    await first
+
+    assert "plus calme" not in played, "played a pick from the steer they replaced"
+    assert "plus calme" not in [t.get("why")
+                                for t in library.queue_tracks(dj.queue)]
+
+
+@pytest.mark.asyncio
+async def test_a_steer_expiring_mid_refill_keeps_the_batch():
+    # The guard against a newer steer must not fire on an older one going
+    # away. Nobody asked for different music when the twenty minutes ran out,
+    # and dropping the batch leaves an empty queue with no refill behind it --
+    # silence until start_when_ready's poll notices, twenty seconds later.
+    # Every other test here pins the clock at 1000.0, so this one builds its
+    # own DJ to get a clock that can cross the expiry mid-pick.
+    clock = [1000.0]
+    dj = core.DJ(FakeTransport(), now=lambda: clock[0], rng=random.Random(0))
+
+    def slow_picks(mood, lane):
+        clock[0] += core.STEER_TTL + 1      # they said it a long time ago now
+        return [{"title": "T", "artist": "A", "why": "steered"}]
+
+    dj.picks_for = slow_picks
+    dj.steer = {"text": "plus calme", "at": clock[0]}
+
+    await dj.refill()
+    assert library.queue_tracks(dj.queue), "the batch went in the bin on expiry"
+    await dj.play_next()
+    assert dj.current, "nothing playing; the music stopped"
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_steer_mid_refill_keeps_the_batch():
+    # Same shape, reached by clicking the chip instead of waiting. clearSteer
+    # sets steer to None and does not refill, so dropping this batch leaves
+    # nobody to build the next one.
+    tx = FakeTransport()
+    tx.search_delay = 0.2
+    dj = make_dj(tx)
+    dj.picks_for = lambda mood, lane: [{"title": "T", "artist": "A"}]
+    dj.steer = {"text": "plus calme", "at": dj.now()}
+
+    inflight = asyncio.create_task(dj.refill())
+    await asyncio.sleep(0.05)
+    await dj.on_action({"action": "clearSteer"})
+    await inflight
+
+    assert library.queue_tracks(dj.queue), "clearing the chip emptied the queue"
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_steer_empties_it():
+    dj = make_dj()
+    await dj.on_steer("plus calme")
+    await dj.on_action({"action": "clearSteer"})
+    assert dj.steer_text() is None
+
+
+@pytest.mark.asyncio
+async def test_a_typed_steer_arrives_through_the_ui():
+    dj = make_dj()
+    await dj.on_action({"action": "steer", "text": "plus calme"})
+    assert dj.steer_text() == "plus calme"
+
+
+@pytest.mark.asyncio
+async def test_listening_shows_in_the_ui():
+    dj = make_dj()
+    dj.set_listening(True)
+    assert dj.ui_state()["listening"] is True
+
+
+# ------------------------------------------------------------------- lyrics
+
+
+@pytest.mark.asyncio
+async def test_lyrics_are_fetched_before_the_button_is_pressed():
+    # On the button they cost four hops in series. Prefetched, the press is a
+    # cache read.
+    dj = make_dj()
+    dj.tx.ttml = "<tt>la la</tt>"
+    await dj.play_next()
+    await asyncio.sleep(0)
+    assert dj.lyrics is not None
+    assert dj.lyrics["catalogId"] == dj.current["catalogId"]
+
+
+@pytest.mark.asyncio
+async def test_pressing_lyrics_after_a_prefetch_asks_the_page_once():
+    dj = make_dj()
+    dj.tx.ttml = "<tt>la la</tt>"
+    await dj.play_next()
+    await asyncio.sleep(0)
+    before = len([c for c in dj.tx.calls if c.get("cmd") == "lyrics"])
+    await dj.on_action({"action": "lyrics"})
+    after = len([c for c in dj.tx.calls if c.get("cmd") == "lyrics"])
+    assert before == 1 and after == 1
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_that_fails_says_nothing():
+    # Nobody pressed anything, so a page that cannot answer must not put a
+    # notice on screen about a button they never touched.
+    dj = make_dj()
+    dj.tx.fail_lyrics = True
+    await dj.play_next()
+    await asyncio.sleep(0)
+    assert dj.notice is None
+
+
+@pytest.mark.asyncio
+async def test_pressing_lyrics_still_reports_a_page_that_cannot_answer():
+    dj = make_dj()
+    dj.tx.fail_lyrics = True
+    await dj.play_next()
+    await asyncio.sleep(0)
+    await dj.on_action({"action": "lyrics"})
+    assert dj.notice == "lyrics need a reloaded DJ tab"

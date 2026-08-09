@@ -187,14 +187,15 @@ You need Claude Code, Python 3, one of the browsers above with the Claude in
 Chrome extension, and an account on your music service.
 
 There is also a **standalone app** for Apple Music that runs without Claude
-Code once started, with its own overlay and one-click launch from the
-browser toolbar. See [app/README.md](app/README.md).
+Code once started, with its own overlay, one-click launch from the browser
+toolbar, and a key you hold to tell it what you want out loud. See
+[app/README.md](app/README.md).
 
 ---
 
 ## Engineering notes
 
-- **275 automated tests**, run on Windows, macOS and Linux on every push. The
+- **360 automated tests**, run on Windows, macOS and Linux on every push. The
   browser is mocked, so playback, queueing, mood changes, ratings and the
   whole learning model are tested without a browser open.
 - **Every failure has a path back.** A missing model, a timed-out search, a
@@ -213,6 +214,12 @@ browser toolbar. See [app/README.md](app/README.md).
   prompt carries your taste profile, recent plays and ratings, the same as
   anything else you send Claude. Run the daemon with `--no-claude` and the
   picking never leaves your machine.
+- The standalone app has a microphone. It opens while you hold the key and at
+  no other time; nothing listens between presses, and there is no wake word.
+- A model on your machine turns the clip into text. The recording never
+  reaches a file, and it is gone as soon as the model has read it.
+- That sentence goes to Claude in the batch prompt, next to your taste profile
+  and recent plays, like everything else there.
 
 ## License
 

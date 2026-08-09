@@ -271,6 +271,21 @@
     return { ok: true };
   }
 
+  // Ducking while they talk to the DJ. The previous level rides back on the
+  // reply because the daemon is the one that has to restore it: reading it in
+  // a separate command leaves a gap where a second duck records 0.15 as the
+  // level to go back to, and the music never comes up again.
+  function setVolume(level) {
+    const player = ready();
+    const before = typeof player.volume === "number" ? player.volume : 1;
+    if (level !== undefined && level !== null) {
+      // MusicKit takes 0..1 and throws outside it, which reaches the daemon
+      // as a dead command rather than as a range error.
+      player.volume = Math.min(1, Math.max(0, Number(level) || 0));
+    }
+    return { ok: true, previous: before, volume: player.volume };
+  }
+
   // Commands that touch the player have to say so when there is no player.
   // Reporting a cheerful ok:true for a no-op leaves the daemon believing
   // music is running, and it will not retry something it thinks worked.
@@ -314,6 +329,7 @@
       case "skip":          await ready().skipToNextItem(); return { ok: true };
       case "previous":      await ready().skipToPreviousItem(); return { ok: true };
       case "seek":          await ready().seekToTime(Number(msg.position) || 0); return { ok: true };
+      case "volume":        return setVolume(msg.level);
       case "lyrics":        return await lyrics(msg.catalogId);
       case "recentlyAdded": return await recentlyAdded();
       case "listPlaylists": return await listPlaylists();

@@ -399,6 +399,31 @@
 
   #notice:empty { display: none; }
 
+  #steer {
+    color: var(--dim);
+    font-family: var(--utility);
+    font-size: 10px;
+    font-style: italic;
+    letter-spacing: .04em;
+    padding-top: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 0 auto;
+  }
+
+  #steer:empty { display: none; }
+
+  /* The mic is open. The cover is the only part of the overlay visible when
+     it is closed, so the breathing has to happen there. */
+  body.listening #art { animation: breathe 1.2s ease-in-out infinite; }
+
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .45; }
+  }
+
   /* ------------------------------------------------------------ mood picker */
 
   /* A sheet over the whole panel, like the playlist picker: both groups side
@@ -578,6 +603,8 @@
   <div id="lyrics" class="panel"></div>
 
   <div id="notice" class="panel pywebview-drag-region"></div>
+  <div id="steer" class="panel pywebview-drag-region"
+       title="What you last asked for out loud. Click to forget it."></div>
 </div>
 
 <div id="moods"></div>
@@ -679,6 +706,11 @@ function render() {
     : "Following your activity. Click to pin a mood.";
 
   el("notice").textContent = (state && state.notice) || "";
+
+  // Curly quotes so it reads as something you said, not as a label.
+  const heard = (state && state.steer) || "";
+  el("steer").textContent = heard ? "“" + heard + "”" : "";
+  document.body.classList.toggle("listening", !!(state && state.listening));
 
   // Ratings are per-mood, so the tooltip says which mood: one star while
   // debugging is not a verdict on the track everywhere.
@@ -1146,6 +1178,11 @@ el("chip").addEventListener("click", (e) => {
   }
   box.classList.toggle("show");
   fitWindow();
+});
+
+el("steer").addEventListener("click", (e) => {
+  e.stopPropagation();
+  send({action: "clearSteer"});
 });
 
 document.addEventListener("click", () => {
