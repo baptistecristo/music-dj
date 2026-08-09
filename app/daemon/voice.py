@@ -16,6 +16,9 @@ DUCK_LEVEL = 0.15         # quiet enough to talk over, loud enough to still be o
 # Generous for a clip capped at 15 seconds. It exists for the transcriber that
 # never comes back at all, not for the slow one.
 TRANSCRIBE_TIMEOUT = 60
+# Twelve or so updates a second: enough that the bar tracks a voice, few
+# enough that it stays a message the overlay can ignore cheaply.
+METER_INTERVAL = 0.08
 
 
 class Voice:
@@ -59,6 +62,7 @@ class Voice:
             # Spawned last, so a microphone that refuses to open has nothing
             # ducked to put back.
             self._spawn(self.dj.duck(self.duck_level))
+            self._spawn(self._meter())
         except Exception:
             # Latching the flags on the way out would swallow every later
             # press, which is the same stuck microphone by another door.
@@ -78,6 +82,22 @@ class Voice:
         # overlay went on saying the microphone was open after you let go.
         self.dj.set_listening(False)
         self._spawn(self._finish())
+
+    async def _meter(self):
+        """Report how loud the microphone is, until the key comes up.
+
+        The point is the difference between a key that did nothing and a
+        microphone that heard nothing: a bar that never moves while you talk
+        says which one you have, and no amount of staring at a pulse does.
+        """
+        try:
+            while self.recording:
+                self.dj.push_level(getattr(self.recorder, "level", 0.0))
+                await asyncio.sleep(METER_INTERVAL)
+        finally:
+            # The bar belongs to the open microphone. Leaving it wherever
+            # your last syllable put it reads as still listening.
+            self.dj.push_level(0.0)
 
     async def _finish(self):
         text = ""

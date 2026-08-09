@@ -103,17 +103,27 @@ class Recorder:
         self._blocks = []
         self._frames = 0
         self._lock = threading.Lock()
+        # Loudest sample of the last block, for the bar under the mic badge.
+        # Read from the event loop while PortAudio's thread writes it, which
+        # is safe for one float and worth no lock: a reader that catches the
+        # previous block's peak is a frame late on a moving bar.
+        self.level = 0.0
 
     def start(self):
         audio = _import_audio()
         if not audio or self._stream is not None:
             return
-        sounddevice, _ = audio
+        sounddevice, numpy = audio
         self._blocks, self._frames = [], 0
+        self.level = 0.0
 
         def feed(indata, frames, time_info, status):
             # Called on PortAudio's own thread. Copy, because the buffer it
             # hands over is reused the moment this returns.
+            try:
+                self.level = float(numpy.abs(indata).max())
+            except Exception:
+                pass
             with self._lock:
                 if self._frames >= self.max_frames:
                     return
@@ -139,6 +149,7 @@ class Recorder:
             except Exception:
                 log.debug("closing the microphone failed", exc_info=True)
         audio = _import_audio()
+        self.level = 0.0
         with self._lock:
             blocks, self._blocks, self._frames = self._blocks, [], 0
         if not audio or not blocks:

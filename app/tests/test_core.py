@@ -1811,3 +1811,36 @@ async def test_pressing_lyrics_still_reports_a_page_that_cannot_answer():
     await asyncio.sleep(0)
     await dj.on_action({"action": "lyrics"})
     assert dj.notice == "lyrics need a reloaded DJ tab"
+
+
+# ------------------------------------------------------ talking to the overlay
+
+def test_the_level_travels_on_its_own_message_not_a_state_push():
+    # This arrives a dozen times a second while the key is held. A state push
+    # would redraw the whole overlay and re-measure the window each time.
+    dj = make_dj()
+    seen = []
+    dj.subscribe(seen.append)
+    dj.push_level(0.42)
+    assert seen == [{"type": "level", "value": 0.42}]
+    assert "nowPlaying" not in seen[0]
+
+
+def test_a_level_outside_the_bar_is_brought_back_into_it():
+    dj = make_dj()
+    seen = []
+    dj.subscribe(seen.append)
+    dj.push_level(4.0)
+    dj.push_level(-1)
+    dj.push_level("loud")          # must not raise, must not send
+    assert [m["value"] for m in seen] == [1.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_a_pasted_essay_cannot_crowd_out_the_prompt():
+    # The box takes a paste, and whatever is in it goes to Claude next to the
+    # taste profile. Trimmed rather than refused: the front of what they
+    # asked for is still what they asked for.
+    dj = make_dj()
+    await dj.on_action({"action": "steer", "text": "calme " * 200})
+    assert len(dj.steer_text()) == core.STEER_MAX

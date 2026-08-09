@@ -95,8 +95,18 @@ already, because those calls can fail on the wrong Windows build too.
 ducks to 15% while you speak, Whisper turns the clip into text on your machine,
 and the sentence goes into Claude's next prompt whole -- so nothing here parses
 French. The queue is rebuilt on the spot and the current track goes with it.
-What you said sits in the overlay as a chip for twenty minutes; click it to
-forget it.
+A microphone badge appears on the album cover while the key is down, with a
+bar under it that moves with your voice. A bar that stays flat while you talk
+says the microphone is not hearing you; a badge that never appears says the
+key is not firing. That is the one distinction you cannot make by staring at
+the overlay otherwise.
+
+What you said lands in a box under the transport, and stays there for twenty
+minutes. Correct it and press Enter to send the corrected version, or press ✕
+to forget it. The box is there whether or not you have spoken, so you can
+steer by typing when the key, the packages or the microphone are not playing
+along. Moving the mouse away will not close the overlay while you are typing
+in it.
 
 Voice is off until you install it:
 
