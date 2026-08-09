@@ -32,20 +32,20 @@ laptop.
 There is no back door, so the DJ goes through the front: it drives the same
 web player you would use yourself, from inside the page.
 
-A browser extension injects a script into the music site, in the same
-JavaScript world as the site's own code. From there it can call the player.
-The page's own access tokens search the catalogue and never leave it. The
-program driving all this never sees them.
+A browser extension slips a script into the music site, where it runs
+alongside the site's own code and can call the player. The keys the site
+uses to search its catalogue stay in the page. The program driving all this
+never sees them.
 
-A browser keeps extension code and page code in separate worlds on purpose,
-and neither can see the other's variables. Crossing that gap takes two hops,
-page to extension to a local program, each with its own rules about what may
-pass.
+A browser keeps extension code and page code apart on purpose, and neither
+can read the other's variables. Crossing that gap takes two hops, page to
+extension to a program on your machine, each with its own rules about what
+may pass.
 
 ### 2. Knowing what you are doing
 
-Every action in [Claude Code](https://claude.com/claude-code) fires a hook.
-Editing files, running tests, reading documentation and watching a build
+[Claude Code](https://claude.com/claude-code) announces each thing it does.
+Editing a file, running tests, reading documentation and watching a build
 fail all look different, so each one votes for a mood.
 
 Each vote carries a weight and fades. One failing test is not a crisis, and
@@ -81,60 +81,81 @@ Then Claude picks the batch, given your profile, the mood and everything
 above. When Claude is slow or unavailable the profile picks on its own, so
 the music never stops waiting for a model.
 
-### 4. A window that behaves like furniture
+### 4. Understanding what you asked for out loud
+
+The standalone app takes spoken instructions. Hold one key, say what you
+want in French, let go, and the next songs answer you.
+
+The tempting build is to teach the program French: a list of words meaning
+calmer, another meaning louder. That breaks on the first sentence nobody
+thought of, and every fix makes the list longer.
+
+Nothing here reads French. A speech model on your laptop turns the recording
+into a line of text, and that line goes to Claude next to your taste
+profile, the mood, and what you played this afternoon. Claude was already
+choosing songs from all of that. Now it reads your sentence too.
+
+Two smaller things decide whether it feels like talking. The music drops to
+a whisper while you hold the key rather than stopping, because a hole where
+the music was distracts more than the music did. The key also has to reach
+the DJ before the letter reaches whatever you were typing in.
+
+The operating systems disagree about that second one. Windows reserves a
+combination for you and swallows it whole, so the J never lands in your
+document. It allows modifiers plus a single key and no more, which killed
+the three-key chord this started as: pressing it would have sent a real
+Alt+D to whatever was in front of you on the way to the J. macOS answers a
+different question. It reports the character the key produced, and holding
+Option turns J into `∆`, so a program watching for the letter waits forever
+while you hold the key down. It also reports which physical key moved, and
+that answer does not change, so the DJ reads both.
+
+### 5. A window that behaves like furniture
 
 The player is a small album cover that sits above everything, has no title
 bar, stays out of Alt+Tab and the taskbar, and dissolves when you pause.
 
-Windows gives you that through the compositor: acrylic blur, per-window
-transparency, and a style that makes the window ignore the mouse while it is
-invisible. Hide a window of this kind the obvious way and you never get it
-back. macOS and Linux share none of those APIs, so there the same window runs
-on the cross-platform layer alone and looks plainer for it.
+Windows will do all of that, through the same drawing layer that frosts the
+taskbar: blur behind the window, transparency it controls itself, and a
+setting that sends the mouse straight through while the window is invisible.
+Hide a window of this kind the obvious way and you never get it back. None
+of that exists on macOS or Linux, where the same window falls back to what
+every system agrees on and looks plainer for it.
 
-### 5. Making one codebase run everywhere
+### 6. Making one codebase run everywhere
 
 Three operating systems and seven browsers, each disagreeing about
 something:
 
-- The overlay **crashed on import** on macOS and Linux. The module that
-  describes Windows data types raises an error on other systems rather than
-  coming up empty.
+- The overlay **crashed on import** on macOS and Linux. The part of Python
+  that describes Windows data types raises an error on other systems rather
+  than coming up empty.
 - The play and pause icons came from a font that ships only with Windows.
   Everywhere else they were empty boxes. They are drawings now.
 - Starting a background program takes opposite arguments on Windows and
   everywhere else. Passing the Windows ones elsewhere is an error, not a
   no-op.
-- Teaching a browser to launch a local program means a registry key on
-  Windows and a file in a different directory for every browser on macOS and
-  Linux. One script now writes all of them.
-- Firefox spells half the extension API its own way, and hands back a
-  different kind of value from the same call.
+- Teaching a browser to launch a program on your machine means an entry in
+  the Windows registry, and a file in a different folder for every browser
+  on macOS and Linux. One script now writes all of them.
+- Firefox spells half the extension commands its own way, and hands back a
+  different kind of answer from the same call.
 
 ---
 
 ## How the pieces fit
 
-```
-   Claude Code            this app                        your browser
-   ───────────            ────────                        ────────────
+There are four parts, and only one of them decides anything.
 
-   what you're    ──▶  ~/.music-dj/    ──▶   daemon   ══▶   extension
-   doing now           state.json             │      ws        │
-   (hooks)                                    │               │ injects
-                                              │               ▼
-                       taste profile   ──▶    │            the page's
-                       ratings, skips         │           own player
-                                              │               │
-                                    ws        ▼               ▼
-                             overlay ◀────────┘            speakers
-                          (what's playing,
-                           stars, controls)
-```
+Claude Code writes down what you are working on. A program running in the
+background reads that, together with your taste profile and your ratings,
+and chooses what plays next. It tells the browser extension, and the
+extension drives the page. A small album-cover window shows what is playing
+and takes your stars and your skips.
 
-Only the daemon decides anything. The extension carries out what it is told
-and the overlay reports back, both over local sockets that refuse connections
-from anywhere but this machine.
+The extension carries out what it is told and the window reports back.
+Neither of them picks a song. Both reach the background program over
+connections that refuse anything not coming from this machine.
 
 ---
 
@@ -143,15 +164,45 @@ from anywhere but this machine.
 | | Works | Notes |
 |---|---|---|
 | **Windows 10/11** | ✅ | Frosted overlay, no taskbar button. Developed and used here |
-| **macOS** | ✅ | Plain overlay; the frosted glass is a Windows API |
-| **Linux** | ✅ | Same, with a GTK or Qt backend |
+| **macOS** | ✅ | Plain overlay; the frosted glass is Windows-only |
+| **Linux** | ✅ | Same, with a GTK or Qt window underneath |
 | **Chrome, Edge, Brave, Vivaldi, Opera** | ✅ | One build covers all five |
 | **Firefox** | ✅ | 128 or newer |
-| **Safari** | ❌ | Needs repackaging through Xcode |
+| **Safari** | ❌ | Needs repackaging through Apple's developer tools |
 | **Phones, tablets** | ❌ | The DJ runs beside your speakers, not in the cloud |
 
 The test suite covers macOS, Linux and Firefox on every push. Nobody has sat
 down in front of them, which is worth knowing before you rely on it.
+
+---
+
+## Engineering notes
+
+- **360 automated tests**, run on Windows, macOS and Linux on every push. The
+  browser is mocked, so playback, queueing, mood changes, ratings and the
+  whole learning model are tested without a browser open.
+- **Every failure has a path back.** A missing model, a timed-out search, a
+  reloaded tab, a dead track, two commands racing each other: each one ends
+  with music still playing. Nothing upstream gets to stop the song.
+- **The comments name the bug.** Most of the hard parts here read as ordinary
+  code until you know what went wrong to put them there, so each one says.
+
+## Privacy
+
+- Your taste profile, ratings and history live in `~/.music-dj/` on your
+  machine.
+- The DJ never sees your password. You sign in to your music service
+  yourself, in your own browser.
+- Your library is never uploaded. When Claude picks the next batch, the
+  prompt carries your taste profile, recent plays and ratings, the same as
+  anything else you send Claude. Run the daemon with `--no-claude` and the
+  picking never leaves your machine.
+- The standalone app has a microphone. It opens while you hold the key and at
+  no other time; nothing listens between presses, and there is no wake word.
+- A model on your machine turns the clip into text. The recording never
+  reaches a file, and it is gone as soon as the model has read it.
+- That sentence goes to Claude in the batch prompt, next to your taste profile
+  and recent plays, like everything else there.
 
 ---
 
@@ -190,36 +241,6 @@ There is also a **standalone app** for Apple Music that runs without Claude
 Code once started, with its own overlay, one-click launch from the browser
 toolbar, and a key you hold to tell it what you want out loud. See
 [app/README.md](app/README.md).
-
----
-
-## Engineering notes
-
-- **360 automated tests**, run on Windows, macOS and Linux on every push. The
-  browser is mocked, so playback, queueing, mood changes, ratings and the
-  whole learning model are tested without a browser open.
-- **Every failure has a path back.** A missing model, a timed-out search, a
-  reloaded tab, a dead track, two commands racing each other: each one ends
-  with music still playing. Nothing upstream gets to stop the song.
-- **The comments name the bug.** Most of the hard parts here read as ordinary
-  code until you know what went wrong to put them there, so each one says.
-
-## Privacy
-
-- Your taste profile, ratings and history live in `~/.music-dj/` on your
-  machine.
-- The DJ never sees your password. You sign in to your music service
-  yourself, in your own browser.
-- Your library is never uploaded. When Claude picks the next batch, the
-  prompt carries your taste profile, recent plays and ratings, the same as
-  anything else you send Claude. Run the daemon with `--no-claude` and the
-  picking never leaves your machine.
-- The standalone app has a microphone. It opens while you hold the key and at
-  no other time; nothing listens between presses, and there is no wake word.
-- A model on your machine turns the clip into text. The recording never
-  reaches a file, and it is gone as soon as the model has read it.
-- That sentence goes to Claude in the batch prompt, next to your taste profile
-  and recent plays, like everything else there.
 
 ## License
 
