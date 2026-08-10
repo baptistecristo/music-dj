@@ -235,3 +235,21 @@ def test_coming_back_cancels_the_fade_out():
     body = page()
     expand = body.split("function expand()", 1)[1].split("function ", 1)[0]
     assert 'classList.remove("closing")' in expand
+
+
+def test_a_spoken_sentence_is_shown_whole_not_clipped():
+    # 368px of panel does not hold a sentence anyone actually says. A single
+    # line meant you were correcting text you could not read.
+    body = page()
+    assert 'id="asktext" rows="1"' in body, "the box has to be able to wrap"
+    assert "<textarea id=\"asktext\"" in body
+    assert "scrollHeight" in body, "no auto-height, so it cannot grow"
+
+
+def test_enter_sends_rather_than_adding_a_line():
+    # A textarea takes a newline on Enter unless stopped, and this box holds
+    # one request.
+    body = page()
+    keydown = body.split('el("asktext").addEventListener("keydown"', 1)[1]
+    keydown = keydown.split("});", 1)[0]
+    assert "preventDefault()" in keydown
