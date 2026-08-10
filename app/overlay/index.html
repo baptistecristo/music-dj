@@ -410,7 +410,7 @@
      steer the music. */
   #ask {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 4px;
     padding-top: 4px;
     flex: 0 0 auto;
@@ -429,6 +429,14 @@
     letter-spacing: .04em;
     padding: 2px 0;
     border-bottom: 1px solid transparent;
+    /* Grows to the sentence, up to four lines, then scrolls. The height is
+       set from scrollHeight in JS; these keep the box from being dragged by
+       its corner or showing its own scrollbar on the way. */
+    resize: none;
+    overflow: hidden;
+    line-height: 1.4;
+    max-height: 56px;
+    display: block;
   }
 
   #asktext::placeholder { color: var(--dim); font-style: italic; }
@@ -689,9 +697,11 @@
   <!-- No drag-region class on the input: a drag region swallows the click
        that would have put the caret in it. -->
   <div id="ask" class="panel">
-    <input id="asktext" type="text" spellcheck="false"
-           placeholder="ask for something"
-           title="Hold the key and say it, or type it here. Enter to send.">
+    <!-- A textarea, not an input: a spoken sentence runs past the width of
+         this panel, and half a sentence is not something you can correct. -->
+    <textarea id="asktext" rows="1" spellcheck="false"
+              placeholder="ask for something"
+              title="Hold the key and say it, or type it here. Enter to send."></textarea>
     <button id="askclear" type="button" title="Forget what you asked">&#x2715;</button>
   </div>
 </div>
@@ -808,6 +818,7 @@ function render() {
     lastHeard = heard;
     if (document.activeElement !== box) {
       box.value = heard;
+      sizeBox();
       if (heard) { box.focus(); box.select(); }
     }
   }
@@ -1144,6 +1155,15 @@ function renderSetup() {
 
 let levelAt = 0;                // when the last level message arrived
 
+function sizeBox() {
+  // The panel is 368px wide and a spoken sentence is longer than that, so the
+  // box takes as many lines as it needs and the window grows under it.
+  const box = el("asktext");
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 56) + "px";
+  fitWindow();
+}
+
 function showLevel(value) {
   levelAt = Date.now();
   // Speech peaks around .05 to .3 and only shouting reaches 1. Linear, the
@@ -1327,7 +1347,10 @@ el("chip").addEventListener("click", (e) => {
 
 el("asktext").addEventListener("keydown", (e) => {
   e.stopPropagation();
-  if (e.key === "Enter") {
+  if (e.key === "Enter" && !e.shiftKey) {
+    // A textarea would take a newline here. Sending is what Enter means in a
+    // one-request box; Shift+Enter is left alone for anyone who wants a break.
+    e.preventDefault();
     const text = el("asktext").value.trim();
     // An empty box and Enter means "forget it", not "act on nothing".
     send(text ? {action: "steer", text: text} : {action: "clearSteer"});
@@ -1342,6 +1365,7 @@ el("asktext").addEventListener("keydown", (e) => {
 
 el("asktext").addEventListener("input", () => {
   el("ask").classList.toggle("has-text", !!el("asktext").value);
+  sizeBox();
 });
 
 // The panel shuts on mouseleave. Without this it would close over a sentence
@@ -1354,6 +1378,7 @@ el("askclear").addEventListener("click", (e) => {
   el("asktext").value = "";
   lastHeard = "";
   el("ask").classList.remove("has-text");
+  sizeBox();                    // back to one line, and the window with it
   send({action: "clearSteer"});
 });
 
